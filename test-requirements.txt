@@ -1,0 +1,6 @@
+coverage
+codecov
+mock
+nose
+pep8
+pylint

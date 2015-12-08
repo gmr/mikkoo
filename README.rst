@@ -3,6 +3,8 @@ Mikkoo
 A `PgQ <https://wiki.postgresql.org/wiki/SkyTools#PgQ>`_ to
 `RabbitMQ <https://www.rabbitmq.com>`_ relay.
 
+Mikkoo is named for the rabbit in the "Clever Rabbit and the Elephant" fable.
+
 PgQ Setup
 ---------
 
@@ -10,9 +12,13 @@ PgQ Setup
 
     .. code:: sql
 
-        gavinr=# CREATE EXTENSION pgq;
+        # CREATE EXTENSION pgq;
         CREATE EXTENSION
-        gavinr=# SELECT pgq.create_queue('test');
+        # SELECT pgq.create_queue('test');
+        create_queue
+        --------------
+                    1
+        (1 row)
 
 2. Ensure that `pgqd <http://skytools.projects.pgfoundry.org/skytools-3.0/doc/pgqd.html>`_
    is running.
@@ -155,6 +161,9 @@ The following table details the configuration options available per queue:
 | ``processes``      | The number of worker processes to run for the queue. Default: ``1`` |
 +--------------------+---------------------------------------------------------------------+
 | ``confirm``        | Enable/Disable RabbitMQ Publisher Confirmations. Default: ``False`` |
++--------------------+---------------------------------------------------------------------+
+| ``wait_duration``  | How long to wait before checking the queue after the last empty     |
+|                    | result. Default: ``1``                                              |
 +--------------------+---------------------------------------------------------------------+
 
 Example Configuration
