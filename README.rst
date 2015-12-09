@@ -3,6 +3,8 @@ Mikkoo
 A `PgQ <https://wiki.postgresql.org/wiki/SkyTools#PgQ>`_ to
 `RabbitMQ <https://www.rabbitmq.com>`_ relay.
 
+Mikkoo is named for the rabbit in the "Clever Rabbit and the Elephant" fable.
+
 PgQ Setup
 ---------
 
@@ -10,9 +12,13 @@ PgQ Setup
 
     .. code:: sql
 
-        gavinr=# CREATE EXTENSION pgq;
+        # CREATE EXTENSION pgq;
         CREATE EXTENSION
-        gavinr=# SELECT pgq.create_queue('test');
+        # SELECT pgq.create_queue('test');
+        create_queue
+        --------------
+                    1
+        (1 row)
 
 2. Ensure that `pgqd <http://skytools.projects.pgfoundry.org/skytools-3.0/doc/pgqd.html>`_
    is running.
@@ -138,7 +144,6 @@ instance using default credentials.
          invoices:
            postgres_url: postgresql://localhost:5432/postgres
            rabbitmq_url: amqp://localhost:5672/%2f
-           processes: 2
            confirm: False
 
 Queue Configuration Options
@@ -148,13 +153,20 @@ The following table details the configuration options available per queue:
 +--------------------+---------------------------------------------------------------------+
 | Key                | Description                                                         |
 +====================+=====================================================================+
+| ``confirm``        | Enable/Disable RabbitMQ Publisher Confirmations. Default: ``True``  |
++--------------------+---------------------------------------------------------------------+
+| ``consumer_name``  | Overwrite the default PgQ consumer name. Default: ``mikkoo``        |
++--------------------+---------------------------------------------------------------------+
+| ``max_failures``   | Maximum failures before discarding an event. Default: ``10``        |
++--------------------+---------------------------------------------------------------------+
 | ``postgresql_url`` | The url for connecting to PostgreSQL                                |
 +--------------------+---------------------------------------------------------------------+
 | ``rabbitmq_url``   | The AMQP url for connecting to RabbitMQ                             |
 +--------------------+---------------------------------------------------------------------+
-| ``processes``      | The number of worker processes to run for the queue. Default: ``1`` |
+| ``retry_delay``    | How long in seconds until PgQ emits failed events. Default: ``10``  |
 +--------------------+---------------------------------------------------------------------+
-| ``confirm``        | Enable/Disable RabbitMQ Publisher Confirmations. Default: ``False`` |
+| ``wait_duration``  | How long to wait before checking the queue after the last empty     |
+|                    | result. Default: ``1``                                              |
 +--------------------+---------------------------------------------------------------------+
 
 Example Configuration
@@ -175,10 +187,13 @@ The following is an example of a full configuration file:
 
       workers:
         test:
+          confirm: False
+          consumer_name: my_consumer
+          max_failures: 5
           postgres_url: postgresql://localhost:5432/postgres
           rabbitmq_url: amqp://localhost:5672/%2f
-          processes: 1
-          confirm: False
+          retry_delay: 5
+          wait_duration: 5
 
     Daemon:
       user: mikkoo
@@ -186,10 +201,10 @@ The following is an example of a full configuration file:
 
     Logging:
       version: 1
-      formatters: []
-      verbose:
-        format: '%(levelname) -10s %(asctime)s %(process)-6d %(processName) -15s %(name) -10s %(funcName) -20s: %(message)s'
-        datefmt: '%Y-%m-%d %H:%M:%S'
+      formatters:
+        verbose:
+          format: '%(levelname) -10s %(asctime)s  %(process)-6d %(processName) -20s %(name) -18s: %(message)s'
+          datefmt: '%Y-%m-%d %H:%M:%S'
       handlers:
         console:
           class: logging.StreamHandler

@@ -1,0 +1,66 @@
+Application:
+
+  poll_interval: 10
+
+  statsd:
+    enabled: false
+    host: localhost
+    port: 8125
+
+  workers:
+    example:
+      postgres_url: postgresql://localhost:5432/gavinr
+      rabbitmq_url: amqp://localhost:5672/%2f
+      processes: 4
+      wait_duration: 0.05
+      confirm: False
+      retry_interval: 10
+      max_failures: 2
+      unregister: False
+
+Daemon:
+  user: mikkoo
+  pidfile: /var/run/mikkoo
+
+Logging:
+  version: 1
+  formatters:
+    verbose:
+      format: '%(levelname) -10s %(asctime)s  %(process)-6d %(processName) -20s %(name) -18s: %(message)s'
+      datefmt: '%Y-%m-%d %H:%M:%S'
+  handlers:
+    console:
+      class: logging.StreamHandler
+      formatter: verbose
+      debug_only: True
+  loggers:
+    helper:
+      handlers: [console]
+      level: INFO
+      propagate: true
+    mikkoo:
+      handlers: [console]
+      level: INFO
+      propagate: true
+    #mikkoo.worker:
+    #  handlers: [console]
+    #  level: DEBUG
+    #  propagate: false
+    pika:
+      handlers: [console]
+      level: ERROR
+      propagate: true
+    queries:
+      handlers: [console]
+      level: ERROR
+      propagate: true
+    tornado:
+      handlers: [console]
+      level: ERROR
+      propagate: true
+  root:
+    handlers: [console]
+    level: CRITICAL
+    propagate: false
+  disable_existing_loggers: true
+  incremental: false
