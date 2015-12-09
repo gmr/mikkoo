@@ -26,13 +26,10 @@ class Worker(object):
     the MCP
 
     """
-    DEFAULT_QTY = 1
-
     def __init__(self, config, stats_queue):
         self.config = config
-        self.desired_quantity = config.get('processes', self.DEFAULT_QTY)
         self.last_process = 0
-        self.processes = {}
+        self.process = None
         self.stats_queue = stats_queue
 
 
@@ -80,26 +77,23 @@ class MasterControlProgram(state.State):
         """
         active_processes, dead_processes = list(), list()
         for name in self.workers.keys():
-            for process in self.workers[name].processes.keys():
-                if self.workers[name].processes[process].pid == os.getpid():
-                    continue
-                try:
-                    proc = psutil.Process(
-                        self.workers[name].processes[process].pid)
-                except psutil.NoSuchProcess:
-                    dead_processes.append((name, process))
-                    continue
+            if self.workers[name].process.pid == os.getpid():
+                continue
+            try:
+                proc = psutil.Process(self.workers[name].process.pid)
+            except psutil.NoSuchProcess:
+                dead_processes.append(name)
+                continue
 
-                if self.is_dead(proc):
-                    dead_processes.append((name, process))
-                else:
-                    active_processes.append(
-                        self.workers[name].processes[process])
+            if self.is_dead(proc):
+                dead_processes.append(name)
+            else:
+                active_processes.append(self.workers[name].process)
 
         if dead_processes:
             LOGGER.debug('Removing %i dead process(es)', len(dead_processes))
-            for process in dead_processes:
-                self.remove_worker_process(*process)
+            for name in dead_processes:
+                self.remove_worker_process(name)
         return active_processes
 
     def calculate_stats(self, data):
@@ -118,12 +112,10 @@ class MasterControlProgram(state.State):
         worker_stats = dict()
         for name in data.keys():
             worker_stats[name] = self.worker_stats_counter()
-            worker_stats[name]['processes'] = self.process_count(name)
-            for process in data[name].keys():
-                for key in stats:
-                    value = data[name][process]['counts'].get(key, 0)
-                    stats[key] += value
-                    worker_stats[name][key] += value
+            for key in stats:
+                value = data[name]['counts'].get(key, 0)
+                stats[key] += value
+                worker_stats[name][key] += value
 
         # Return a data structure that can be used in reporting out the stats
         stats['processes'] = len(self.active_processes)
@@ -134,18 +126,16 @@ class MasterControlProgram(state.State):
             'counts': stats
         }
 
-    def check_process_counts(self):
+    def check_processes(self):
         """Check for the minimum worker process levels and start up new
         processes needed.
 
         """
-        LOGGER.debug('Checking minimum worker process levels')
+        LOGGER.debug('Checking worker processes')
         for name in self.workers.keys():
-            processes_needed = self.process_spawn_qty(name)
-            LOGGER.debug('Need to spawn %i processes for %s',
-                         processes_needed, name)
-            if processes_needed:
-                self.start_processes(name, processes_needed)
+            if (not self.workers[name].process or
+                    not self.workers[name].process.is_alive()):
+                self.start_process(name)
 
     def collect_results(self, data_values):
         """Receive the data from the workers polled and process it.
@@ -159,26 +149,13 @@ class MasterControlProgram(state.State):
         # Get the name and worker name and remove it from what is reported
         worker_name = data_values['worker_name']
         del data_values['worker_name']
-        process_name = data_values['name']
         del data_values['name']
 
         # Add it to our last poll global data
-        if worker_name not in self.last_poll_results:
-            self.last_poll_results[worker_name] = dict()
-        self.last_poll_results[worker_name][process_name] = data_values
+        self.last_poll_results[worker_name] = data_values
 
         # Calculate the stats
         self.stats = self.calculate_stats(self.last_poll_results)
-
-    @staticmethod
-    def worker_keyword(counts):
-        """Return worker or workers depending on the process count.
-
-        :param dict counts: The count dictionary to use process count
-        :rtype: str
-
-        """
-        return 'worker' if counts['processes'] == 1 else 'workers'
 
     @staticmethod
     def worker_stats_counter():
@@ -188,8 +165,10 @@ class MasterControlProgram(state.State):
 
         """
         return {
+            worker.Process.BATCHES: 0,
             worker.Process.ERROR: 0,
-            worker.Process.PROCESSED: 0
+            worker.Process.PROCESSED: 0,
+            worker.Process.PENDING: 0
         }
 
     @staticmethod
@@ -244,18 +223,13 @@ class MasterControlProgram(state.State):
                            len(self.poll_data['processes']),
                            self.poll_data['processes'])
 
-        if self.stats['counts']['processes'] > 1:
-            LOGGER.info('%i workers processed %i messages with %i errors',
-                        self.stats['counts']['processes'],
-                        self.stats['counts']['processed'],
-                        self.stats['counts']['failed'])
-
         for key in self.stats['workers'].keys():
-            LOGGER.info('%i %s %s processed %i messages with %i errors',
-                        self.stats['workers'][key]['processes'], key,
-                        self.worker_keyword(self.stats['workers'][key]),
-                        self.stats['workers'][key]['processed'],
-                        self.stats['workers'][key]['failed'])
+            LOGGER.info('%s worker processed %i events with %i errors '
+                        'in %i batches with %i pending events', key,
+                        self.stats['workers'][key][worker.Process.PROCESSED],
+                        self.stats['workers'][key][worker.Process.ERROR],
+                        self.stats['workers'][key][worker.Process.BATCHES],
+                        self.stats['workers'][key][worker.Process.PENDING])
 
     def new_process(self, name):
         """Create a new worker instances
@@ -272,7 +246,6 @@ class MasterControlProgram(state.State):
                 'worker': self.workers[name].config
             },
             'daemon': False,
-            'name': process_name,
             'stats_queue': self.stats_queue,
             'worker_name': name,
         }
@@ -321,24 +294,24 @@ class MasterControlProgram(state.State):
         # If we don't have any active workers, spawn new ones
         if not self.total_process_count:
             LOGGER.debug('Did not find any active workers in poll')
-            return self.check_process_counts()
+            return self.check_processes()
 
         # Start our data collection dict
         self.poll_data = {'timestamp': time.time(), 'processes': list()}
 
         # Iterate through all of the workers
-        for proc in self.active_processes:
-            LOGGER.debug('Checking runtime state of %s', proc.name)
-            if proc == multiprocessing.current_process():
+        for process in self.active_processes:
+            LOGGER.debug('Checking runtime state of %s', process.name)
+            if process == multiprocessing.current_process():
                 LOGGER.debug('Matched current process in active_processes')
                 continue
 
             # Send the profile signal
-            os.kill(int(proc.pid), signal.SIGPROF)
-            self.poll_data['processes'].append(proc.name)
+            os.kill(int(process.pid), signal.SIGPROF)
+            self.poll_data['processes'].append(process.name)
 
         # Check if we need to start more processes
-        self.check_process_counts()
+        self.check_processes()
 
     @property
     def poll_duration_exceeded(self):
@@ -347,7 +320,8 @@ class MasterControlProgram(state.State):
         :rtype: bool
 
         """
-        return (time.time() - self.poll_data['timestamp']) >= self.poll_interval
+        return (time.time() -
+                self.poll_data['timestamp']) >= self.poll_interval
 
     def poll_results_check(self):
         """Check the polling results by checking to see if the stats queue is
@@ -371,44 +345,18 @@ class MasterControlProgram(state.State):
             LOGGER.warning('Did not receive results from %r',
                            self.poll_data['processes'])
 
-    def process_count(self, name):
-        """Return the process count for the given worker name and connection.
-
-        :param str name: The worker name
-        :rtype: int
-
-        """
-        return len(self.workers[name].processes)
-
-    def process_spawn_qty(self, name):
-        """Return the number of processes to spawn for the given worker name
-        and connection.
-
-        :param str name: The worker name
-        :rtype: int
-
-        """
-        return self.workers[name].desired_quantity - self.process_count(name)
-
-    def remove_worker_process(self, name, process):
+    def remove_worker_process(self, name):
         """Remove all details for the specified worker and process name.
 
         :param str name: The worker name
-        :param str process: The process to remove
 
         """
-        mcp_pid = os.getpid()
-        if process in self.workers[name].processes:
-            if self.workers[name].processes[process].is_alive():
-                if self.workers[name].processes[process].pid != mcp_pid:
-                    try:
-                        self.workers[name].processes[process].terminate()
-                    except OSError:
-                        pass
-                else:
-                    LOGGER.debug('Child has my pid? %r, %r', mcp_pid,
-                                 self.workers[name].processes[process].pid)
-            del self.workers[name].processes[process]
+        if self.workers[name].process.is_alive():
+            try:
+                self.workers[name].process.terminate()
+            except OSError:
+                pass
+        self.workers[name].process = None
 
     def run(self):
         """When the worker is ready to start running, kick off all of our
@@ -432,9 +380,6 @@ class MasterControlProgram(state.State):
             if not self.is_sleeping:
                 self.set_state(self.STATE_SLEEPING)
             signal.pause()
-
-        # Note we're exiting run
-        LOGGER.info('Exiting Master Control Program')
 
     @staticmethod
     def set_process_name():
@@ -473,20 +418,10 @@ class MasterControlProgram(state.State):
         LOGGER.info('Spawning %s process for %s', process_name, name)
 
         # Append the process to the worker process list
-        self.workers[name].processes[process_name] = process
+        self.workers[name].process = process
 
         # Start the process
         process.start()
-
-    def start_processes(self, name, quantity):
-        """Start the specified quantity of worker processes for the given
-        worker.
-
-        :param str name: The worker name
-        :param int quantity: The quantity of processes to start
-
-        """
-        [self.start_process(name) for _i in range(0, quantity)]
 
     def setup_workers(self):
         """Iterate through each worker in the configuration and kick off the
@@ -494,7 +429,7 @@ class MasterControlProgram(state.State):
 
         """
         for name in self.config.application.workers.keys():
-            self.start_processes(name, self.workers[name].desired_quantity)
+            self.start_process(name)
 
     def stop_processes(self):
         """Iterate through all of the worker processes shutting them down."""
@@ -517,8 +452,7 @@ class MasterControlProgram(state.State):
         iterations = 0
         processes = self.total_process_count
         while processes:
-            LOGGER.info('Waiting on %i active processes to shut down',
-                        processes)
+            LOGGER.debug('Waiting on %i process(es) to shutdown', processes)
             try:
                 time.sleep(0.5)
             except KeyboardInterrupt:
