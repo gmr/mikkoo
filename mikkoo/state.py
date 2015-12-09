@@ -22,6 +22,8 @@ class State(object):
     STATE_STOP_REQUESTED = 0x06
     STATE_SHUTTING_DOWN = 0x07
     STATE_STOPPED = 0x08
+    STATE_RECONNECTING = 0x09
+    STATE_BLOCKED = 0x10
 
     # For reverse lookup
     STATES = {
@@ -32,7 +34,9 @@ class State(object):
         0x05: 'Sleeping',
         0x06: 'Stop Requested',
         0x07: 'Shutting down',
-        0x08: 'Stopped'
+        0x08: 'Stopped',
+        0x09: 'Reconnecting',
+        0x10: 'Blocked'
     }
 
     def __init__(self):
@@ -58,6 +62,15 @@ class State(object):
         self.state_start = time.time()
 
     @property
+    def is_blocked(self):
+        """Returns a bool specifying if the process is blocked by RabbitMQ
+
+        :rtype: bool
+
+        """
+        return self.state == self.STATE_BLOCKED
+
+    @property
     def is_connecting(self):
         """Returns a bool specifying if the process is currently connecting.
 
@@ -74,6 +87,15 @@ class State(object):
 
         """
         return self.state == self.STATE_IDLE
+
+    @property
+    def is_reconnecting(self):
+        """Returns a bool specifying if the process is currently reconnecting.
+
+        :rtype: bool
+
+        """
+        return self.state == self.STATE_RECONNECTING
 
     @property
     def is_running(self):
