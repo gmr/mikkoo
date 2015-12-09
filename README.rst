@@ -144,7 +144,6 @@ instance using default credentials.
          invoices:
            postgres_url: postgresql://localhost:5432/postgres
            rabbitmq_url: amqp://localhost:5672/%2f
-           processes: 2
            confirm: False
 
 Queue Configuration Options
@@ -154,13 +153,17 @@ The following table details the configuration options available per queue:
 +--------------------+---------------------------------------------------------------------+
 | Key                | Description                                                         |
 +====================+=====================================================================+
+| ``confirm``        | Enable/Disable RabbitMQ Publisher Confirmations. Default: ``True``  |
++--------------------+---------------------------------------------------------------------+
+| ``consumer_name``  | Overwrite the default PgQ consumer name. Default: ``mikkoo``        |
++--------------------+---------------------------------------------------------------------+
+| ``max_failures``   | Maximum failures before discarding an event. Default: ``10``        |
++--------------------+---------------------------------------------------------------------+
 | ``postgresql_url`` | The url for connecting to PostgreSQL                                |
 +--------------------+---------------------------------------------------------------------+
 | ``rabbitmq_url``   | The AMQP url for connecting to RabbitMQ                             |
 +--------------------+---------------------------------------------------------------------+
-| ``processes``      | The number of worker processes to run for the queue. Default: ``1`` |
-+--------------------+---------------------------------------------------------------------+
-| ``confirm``        | Enable/Disable RabbitMQ Publisher Confirmations. Default: ``False`` |
+| ``retry_delay``    | How long in seconds until PgQ emits failed events. Default: ``10``  |
 +--------------------+---------------------------------------------------------------------+
 | ``wait_duration``  | How long to wait before checking the queue after the last empty     |
 |                    | result. Default: ``1``                                              |
@@ -184,10 +187,13 @@ The following is an example of a full configuration file:
 
       workers:
         test:
+          confirm: False
+          consumer_name: my_consumer
+          max_failures: 5
           postgres_url: postgresql://localhost:5432/postgres
           rabbitmq_url: amqp://localhost:5672/%2f
-          processes: 1
-          confirm: False
+          retry_delay: 5
+          wait_duration: 5
 
     Daemon:
       user: mikkoo
@@ -195,10 +201,10 @@ The following is an example of a full configuration file:
 
     Logging:
       version: 1
-      formatters: []
-      verbose:
-        format: '%(levelname) -10s %(asctime)s %(process)-6d %(processName) -15s %(name) -10s %(funcName) -20s: %(message)s'
-        datefmt: '%Y-%m-%d %H:%M:%S'
+      formatters:
+        verbose:
+          format: '%(levelname) -10s %(asctime)s  %(process)-6d %(processName) -20s %(name) -18s: %(message)s'
+          datefmt: '%Y-%m-%d %H:%M:%S'
       handlers:
         console:
           class: logging.StreamHandler
