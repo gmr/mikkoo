@@ -86,12 +86,8 @@ class TestProcess(test_state.TestState):
         signals = [mock.call(signal.SIGPROF, self._obj.on_sigprof),
                    mock.call(signal.SIGABRT, self._obj.stop)]
         with mock.patch('signal.signal') as signal_signal:
-            self._obj.setup_sighandlers()
+            self._obj.setup_signal_handlers()
             signal_signal.assert_has_calls(signals, any_order=True)
-
-    def test_setup_config(self):
-        self.assertDictEqual(self._obj.config,
-                             self.mock_args['config']['worker'])
 
     def test_is_idle_state_processing(self):
         self._obj.state = self._obj.STATE_PROCESSING
