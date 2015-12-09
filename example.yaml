@@ -3,7 +3,7 @@ Application:
   poll_interval: 10
 
   statsd:
-    enabled: true
+    enabled: false
     host: localhost
     port: 8125
 
@@ -11,9 +11,12 @@ Application:
     example:
       postgres_url: postgresql://localhost:5432/gavinr
       rabbitmq_url: amqp://localhost:5672/%2f
-      #processes: 1
-      #wait_duration: 1
-      confirm: True
+      processes: 4
+      wait_duration: 0.05
+      confirm: False
+      retry_interval: 10
+      max_failures: 2
+      unregister: False
 
 Daemon:
   user: mikkoo
@@ -23,7 +26,7 @@ Logging:
   version: 1
   formatters:
     verbose:
-      format: '%(levelname) -10s %(asctime)s %(process)-6d %(processName) -10s %(name) -20s %(funcName) -25s # %(lineno)-6d: %(message)s  '
+      format: '%(levelname) -10s %(asctime)s  %(process)-6d %(processName) -20s %(name) -18s: %(message)s'
       datefmt: '%Y-%m-%d %H:%M:%S'
   handlers:
     console:
@@ -38,11 +41,11 @@ Logging:
     mikkoo:
       handlers: [console]
       level: INFO
-      propagate: false
-    mikkoo.worker:
-      handlers: [console]
-      level: DEBUG
-      propagate: false
+      propagate: true
+    #mikkoo.worker:
+    #  handlers: [console]
+    #  level: DEBUG
+    #  propagate: false
     pika:
       handlers: [console]
       level: ERROR
