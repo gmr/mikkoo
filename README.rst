@@ -5,6 +5,8 @@ A `PgQ <https://wiki.postgresql.org/wiki/SkyTools#PgQ>`_ to
 
 Mikkoo is named for the rabbit in the "Clever Rabbit and the Elephant" fable.
 
+|Version| |Downloads| |Status|
+
 PgQ Setup
 ---------
 
@@ -242,3 +244,12 @@ The following is an example of a full configuration file:
       disable_existing_loggers: true
       incremental: false
 
+
+.. |Version| image:: https://img.shields.io/pypi/v/mikkoo.svg?
+   :target: http://badge.fury.io/py/mikkoo
+
+.. |Status| image:: https://img.shields.io/travis/gmr/mikkoo.svg?
+   :target: https://travis-ci.org/gmr/mikkoo
+
+.. |Downloads| image:: https://img.shields.io/pypi/dm/mikkoo.svg?
+   :target: https://pypi.python.org/pypi/mikkoo
