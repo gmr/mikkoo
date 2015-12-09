@@ -47,15 +47,12 @@ class Controller(helper.Controller):
             LOGGER.info('Waiting up to 3 seconds for MCP to shut things down')
             signal.setitimer(signal.ITIMER_REAL, 3, 0)
             signal.pause()
-            LOGGER.info('Post pause')
 
         # Force MCP to stop
         if self._mcp.is_running:
             LOGGER.warning('MCP is taking too long, requesting process kills')
             self._mcp.stop_processes()
             del self._mcp
-        else:
-            LOGGER.info('MCP exited cleanly')
 
         # Change our state
         self._stopped()
