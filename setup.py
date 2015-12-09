@@ -14,7 +14,7 @@ classifiers = ['Development Status :: 3 - Alpha',
 install_requires = ['helper>=2.4.1',
                     'pika>=0.10.0',
                     'psutil>=3.3.0',
-                    'queries>1.8.1,<2',
+                    'queries>=1.8.1,<2',
                     'tornado>=4.2,<4.3']
 
 extras_require = {'sentry': ['raven']}
