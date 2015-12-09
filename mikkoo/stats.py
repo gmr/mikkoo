@@ -32,6 +32,11 @@ class Stats(object):
         if self.statsd:
             self.statsd.add_timing(item, duration)
 
+    def set_gauge(self, item, value):
+        if self.statsd:
+            self.statsd.set_gauge(item, value)
+        self.counter[item] = value
+
     def get(self, item):
         return self.counter.get(item)
 

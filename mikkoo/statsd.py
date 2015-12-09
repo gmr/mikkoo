@@ -86,6 +86,15 @@ class StatsdClient(object):
         """
         self._send(key, value * 1000, 'ms')
 
+    def set_gauge(self, key, value=0):
+        """Set a gauge value in statsd for the specified key
+
+        :param str key: The key to set the gauge value for
+        :param int|float value: The value of the gauge
+
+        """
+        self._send(key, value, 'g')
+
     def incr(self, key, value=1):
         """Increment the counter value in statsd by grouping up the counters
         and sending them out in chunks.
