@@ -15,7 +15,7 @@ script: nosetests
 after_success:
   - codecov
 deploy:
-  distributions: sdist bdist_wheel
+  distributions: sdist
   provider: pypi
   user: crad
   on:
@@ -23,4 +23,4 @@ deploy:
     tags: true
     all_branches: true
   password:
-    secure: "QNndN99rD5boB/Sg3I0CzjkFUF1JmGrsQKZ7ONiA+obUWQDqOmggUoPEs1zN8xIExDcM4tPhlCQX0QiYJrKdLQwWiClvKo1wpYUxVm0s/W8SqvhV3IK9VxhMrbZUkmksO48TH4YKav06rEkVxke9g3U92XUJZ6cRAnYUKrjMYaQ="
+    secure: "UpgYKXzqM1MdfSNSB30eS63Yze1pJpHZ1azqzmY/tVNfCYBrp08GamoP00wh8d+5TD6K6WlOS8lYDuxVkDVX+g4fzB/7L5J8WmmKjWXvMBHbZLAw5dYInSnbAHv9lLk3R2n380HCxunJ+HYG5k0WF43oDnLfnVlOAHhrSAjROGvR6BsKYkK24BVSbhRmiEXI5YzDbwPYLziAsQiSM1Cxje4qh/yeaQhFKpLj78aiOJm1xAriKlhe8zzcFMrFgnz6qcG46X/ElOXavzxrcGKoDVTzCi5bYNAhTNMT70RWKTYdC4UtAyz/wWW3VykGylsvgvXmInnIjE8h9sRKpQJ5xw2f11We2UT1NYEXIoM2nuNE/z1bP3oum69YSzhSpwEoGgL5Ia9mPENPesvElAIvoXfPVUnsabpiWN8lkQtXgyH2IhGvtLWXRB488//CLNbaIv0yQryBhcuojYJbPzIBkSc+OI8AGWQugeKhj5ySxqxNKBmxcKh/15Xk3rpq0toQ/aVC0DbGSQxThf4dT+9nWSwBkhNZWNdHuFNctn4Ht2M3Ky+iFDRFoKNChl8fxUjXx38c84QJUKgr+Y8+k2ITiQg1idO06hBBJmHtxALMUxhZmAByYk4mclbnPKH3WlHNdUz/UKedtOSl0XtLdKMPV7eJTrXQJyLAwCC0ntkQu5M="
