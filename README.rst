@@ -221,10 +221,6 @@ The following is an example of a full configuration file:
           handlers: [console]
           level: INFO
           propagate: true
-        mikkoo.worker:
-          handlers: [console]
-          level: DEBUG
-          propagate: true
         pika:
           handlers: [console]
           level: ERROR
