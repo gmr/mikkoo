@@ -14,6 +14,7 @@ import signal
 import time
 import uuid
 
+import arrow
 from tornado import concurrent
 from tornado import ioloop
 import pika
@@ -374,7 +375,7 @@ class Process(multiprocessing.Process, state.State):
             'app_id': self.AMQP_APP_ID,
             'content_type': event['ev_extra2'],
             'correlation_id': str(uuid.uuid4()),
-            'timestamp': int(event['ev_time'].strftime('%s'))
+            'timestamp': self.get_timestamp(event['ev_time'])
         }
         if event['ev_extra4']:
             kwargs['headers'] = json.loads(event['ev_extra4'].encode('utf-8'))
@@ -389,6 +390,16 @@ class Process(multiprocessing.Process, state.State):
                 if key.encode('ascii') in self.VALID_PROPERTIES:
                     kwargs[key.encode('ascii')] = properties[key]
         return pika.BasicProperties(**kwargs)
+
+    @staticmethod
+    def get_timestamp(value):
+        """Return the timestamp in UTC
+
+        :param datetime.datetime value: The event time
+        :rtype: int
+
+        """
+        return arrow.get(value).to('utc').timestamp
 
     def on_publish_confirm(self, _frame):
         """Invoked by pika when a delivery confirmation is received.
