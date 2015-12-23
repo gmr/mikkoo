@@ -1,6 +1,6 @@
-CREATE SCHEMA IF NOT EXISTS mikkoo;
+CREATE SCHEMA mikkoo;
 
-CREATE TABLE IF NOT EXISTS mikkoo.audit (
+CREATE TABLE mikkoo.audit (
     message_id   UUID NOT NULL,
     event_id     BIGINT NOT NULL,
     queue        TEXT NOT NULL,
