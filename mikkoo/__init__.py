@@ -6,4 +6,4 @@ Mikkoo is a PgQ to RabbitMQ Relay
 Named for the rabbit in the clever rabbit and the elephant fable.
 
 """
-__version__ = '0.1.0'
+__version__ = '0.2.0'

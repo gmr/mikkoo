@@ -379,9 +379,15 @@ class Process(multiprocessing.Process, state.State):
         if event['ev_extra4']:
             kwargs['headers'] = json.loads(event['ev_extra4'].encode('utf-8'))
         if event['ev_extra3']:
-            for key in event['ev_extra3']:
+            try:
+                properties = json.loads(event['ev_extra3'])
+            except ValueError:
+                LOGGER.warning('Failed to decode properties from ev_extra3: %r',
+                               event['ev_extra3'])
+                properties = {}
+            for key in properties:
                 if key.encode('ascii') in self.VALID_PROPERTIES:
-                    kwargs[key.encode('ascii')] = event['ev_extra3'][key]
+                    kwargs[key.encode('ascii')] = properties[key]
         return pika.BasicProperties(**kwargs)
 
     def on_publish_confirm(self, _frame):
