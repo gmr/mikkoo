@@ -11,7 +11,7 @@ classifiers = ['Development Status :: 3 - Alpha',
                'Programming Language :: Python :: Implementation :: CPython',
                'License :: OSI Approved :: BSD License']
 
-install_requires = ['arrow>0.7.0,<1',
+install_requires = ['arrow>=0.7.0,<1',
                     'helper>=2.4.1',
                     'pika>=0.10.0',
                     'psutil>=3.3.0',
