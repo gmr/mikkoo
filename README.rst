@@ -167,6 +167,8 @@ The following table details the configuration options available per queue:
 +--------------------+---------------------------------------------------------------------+
 | ``retry_delay``    | How long in seconds until PgQ emits failed events. Default: ``10``  |
 +--------------------+---------------------------------------------------------------------+
+| ``unregister``     | Unregister a consumer with PgQ on shutdown. Default: ``True``       |
++--------------------+---------------------------------------------------------------------+
 | ``wait_duration``  | How long to wait before checking the queue after the last empty     |
 |                    | result. Default: ``1``                                              |
 +--------------------+---------------------------------------------------------------------+
@@ -195,6 +197,7 @@ The following is an example of a full configuration file:
           postgres_url: postgresql://localhost:5432/postgres
           rabbitmq_url: amqp://localhost:5672/%2f
           retry_delay: 5
+          unregister: False
           wait_duration: 5
 
     Daemon:
