@@ -32,10 +32,6 @@ LANGUAGE plpgsql
 SECURITY DEFINER
 VOLATILE STRICT
 AS $BODY$
-/**
- * @author     Gavin M. Roy <gavinr@aweber.com>
- * @since      2015-12-23
- */
 BEGIN
   DELETE FROM mikkoo.audit WHERE message_id = in_message_id;
   RETURN FOUND;
@@ -95,7 +91,6 @@ DECLARE
     headers TEXT;
     properties TEXT;
 BEGIN
-    -- Create a Unique message_id for auditing purposes
     SELECT uuid_generate_v4 INTO message_id FROM public.uuid_generate_v4();
     headers := '{"pgq_queue": "' || queue || '"}';
     properties := '{"message_id": "' || message_id || '"}';
@@ -109,6 +104,8 @@ COMMENT ON FUNCTION mikkoo.insert_audited_event(text, text, text, text, text)  I
 Inserts an event into the specified pgq queue and a record into the audit table.
 A message_id is automatically generated and set in the AMQP message properties.
 The queue name is added to the AMQP headers message property under the key "pgq_queue"
+
+This function requires the uuid-ossp extension.
 
 INPUTS: queue - the queue the message was sent to
         exchange - the exchange the message should be published to
@@ -129,7 +126,6 @@ DECLARE
     headers TEXT;
     properties TEXT;
 BEGIN
-    -- Create a Unique message_id for auditing purposes
     SELECT uuid_generate_v4 INTO message_id FROM public.uuid_generate_v4();
     headers := '{"pgq_queue": "' || queue || '"}';
     properties := '{"message_id": "' || message_id || '"}';
