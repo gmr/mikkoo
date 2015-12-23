@@ -91,10 +91,10 @@ DECLARE
     v_properties TEXT;
 BEGIN
     SELECT uuid_generate_v4 INTO v_message_id FROM public.uuid_generate_v4();
-    v_headers := '{"pgq_queue": "' || in_queue || '"}';
+    v_headers := '{"pgq_queue": "' || $1 || '"}';
     v_properties := '{"message_id": "' || v_message_id || '"}';
-    SELECT insert_event INTO v_event_id FROM pgq.insert_event(in_queue, in_routing_key, in_payload, in_exchange, in_content_type, v_properties, v_headers);
-    PERFORM mikkoo.new_audit_record(v_message_id, v_event_id, in_queue, in_exchange, in_routing_key, in_payload, in_content_type, v_properties, v_headers);
+    SELECT insert_event INTO v_event_id FROM pgq.insert_event($1, $3, $4, $2, $5, v_properties, v_headers);
+    PERFORM mikkoo.new_audit_record(v_message_id, v_event_id, $1, $2, $3, $4, $5, v_properties, v_headers);
     RETURN v_event_id;
 END
 $BODY$;
@@ -126,9 +126,9 @@ DECLARE
     v_properties TEXT;
 BEGIN
     SELECT uuid_generate_v4 INTO v_message_id FROM public.uuid_generate_v4();
-    v_headers := '{"pgq_queue": "' || in_queue || '"}';
+    v_headers := '{"pgq_queue": "' || $1 || '"}';
     v_properties := '{"message_id": "' || v_message_id || '"}';
-    SELECT insert_event INTO v_event_id FROM pgq.insert_event(in_queue, in_routing_key, in_payload, in_exchange, in_content_type, v_properties, v_headers);
+    SELECT insert_event INTO v_event_id FROM pgq.insert_event($1, $3, $4, $2, $5, v_properties, v_headers);
     RETURN v_event_id;
 END
 $BODY$;
@@ -151,7 +151,7 @@ LANGUAGE SQL
 SECURITY DEFINER
 VOLATILE STRICT
 AS $BODY$
-    SELECT insert_event FROM pgq.insert_event(in_queue, in_routing_key, in_payload, in_exchange, in_content_type, in_properties, in_headers);
+    SELECT insert_event FROM pgq.insert_event($1, $3, $4, $2, $5, $6, $7);
 $BODY$;
 
 COMMENT ON FUNCTION mikkoo.insert_event(text, text, text, text, text, text, text)  IS '
