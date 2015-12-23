@@ -157,7 +157,7 @@ LANGUAGE SQL
 SECURITY DEFINER
 VOLATILE STRICT
 AS $BODY$
-    SELECT * FROM pgq.insert_event(queue, routing_key, payload, exchange, content_type, properties, headers);
+    SELECT insert_event FROM pgq.insert_event(queue, routing_key, payload, exchange, content_type, properties, headers);
 $BODY$;
 
 COMMENT ON FUNCTION mikkoo.insert_event(text, text, text, text, text, text, text)  IS '
