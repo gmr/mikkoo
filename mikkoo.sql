@@ -100,7 +100,6 @@ BEGIN
     headers := '{"pgq_queue": "' || queue || '"}';
     properties := '{"message_id": "' || message_id || '"}';
     SELECT insert_event INTO event_id FROM pgq.insert_event(queue, routing_key, payload, exchange, content_type, properties, headers);
-    RAISE NOTICE 'insert_event(%)', event_id;
     PERFORM mikkoo.new_audit_record(message_id, event_id, queue, exchange, routing_key, payload, content_type, properties, headers);
     RETURN event_id;
 END
