@@ -1,6 +1,6 @@
-CREATE SCHEMA mikkoo;
+CREATE SCHEMA IF NOT EXISTS mikkoo;
 
-CREATE TABLE mikkoo.audit (
+CREATE TABLE IF NOT EXISTS mikkoo.audit (
     message_id   UUID NOT NULL,
     event_id     BIGINT NOT NULL,
     queue        TEXT NOT NULL,
@@ -12,6 +12,7 @@ CREATE TABLE mikkoo.audit (
     headers      TEXT,
     published_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
+
 CREATE UNIQUE INDEX audit_message_id ON mikkoo.audit (message_id);
 
 COMMENT ON TABLE mikkoo.audit IS 'Logs all messages published to pgq for auditing purposes.';
@@ -37,8 +38,6 @@ BEGIN
   RETURN FOUND;
 END;
 $BODY$;
-
-ALTER FUNCTION mikkoo.delete_audit_record(uuid) OWNER TO postgres;
 
 COMMENT ON FUNCTION mikkoo.delete_audit_record(uuid) IS '
 Delete a row from mikkoo.audit
@@ -92,11 +91,11 @@ DECLARE
     v_properties TEXT;
 BEGIN
     SELECT uuid_generate_v4 INTO v_message_id FROM public.uuid_generate_v4();
-    v_headers := '{"pgq_queue": "' || queue || '"}';
-    v_properties := '{"message_id": "' || message_id || '"}';
+    v_headers := '{"pgq_queue": "' || in_queue || '"}';
+    v_properties := '{"message_id": "' || v_message_id || '"}';
     SELECT insert_event INTO v_event_id FROM pgq.insert_event(in_queue, in_routing_key, in_payload, in_exchange, in_content_type, v_properties, v_headers);
     PERFORM mikkoo.new_audit_record(v_message_id, v_event_id, in_queue, in_exchange, in_routing_key, in_payload, in_content_type, v_properties, v_headers);
-    RETURN event_id;
+    RETURN v_event_id;
 END
 $BODY$;
 
