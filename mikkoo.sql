@@ -79,23 +79,23 @@ OUTPUTS: message_id text - the sequence-generated id of the feature
          headers - AMQP headers property for the message
          published_at - the timestamp from when the message was published';
 
-CREATE OR REPLACE FUNCTION mikkoo.insert_audited_event(queue text, exchange text, routing_key text, payload text, content_type text)
+CREATE OR REPLACE FUNCTION mikkoo.insert_audited_event(in_queue text, in_exchange text, in_routing_key text, in_payload text, in_content_type text)
 RETURNS BIGINT
 LANGUAGE plpgsql
 SECURITY DEFINER
 VOLATILE STRICT
 AS $BODY$
 DECLARE
-    event_id BIGINT;
-    message_id UUID;
-    headers TEXT;
-    properties TEXT;
+    v_event_id BIGINT;
+    v_message_id UUID;
+    v_headers TEXT;
+    v_properties TEXT;
 BEGIN
-    SELECT uuid_generate_v4 INTO message_id FROM public.uuid_generate_v4();
-    headers := '{"pgq_queue": "' || queue || '"}';
-    properties := '{"message_id": "' || message_id || '"}';
-    SELECT insert_event INTO event_id FROM pgq.insert_event(queue, routing_key, payload, exchange, content_type, properties, headers);
-    PERFORM mikkoo.new_audit_record(message_id, event_id, queue, exchange, routing_key, payload, content_type, properties, headers);
+    SELECT uuid_generate_v4 INTO v_message_id FROM public.uuid_generate_v4();
+    v_headers := '{"pgq_queue": "' || queue || '"}';
+    v_properties := '{"message_id": "' || message_id || '"}';
+    SELECT insert_event INTO v_event_id FROM pgq.insert_event(in_queue, in_routing_key, in_payload, in_exchange, in_content_type, v_properties, v_headers);
+    PERFORM mikkoo.new_audit_record(v_message_id, v_event_id, in_queue, in_exchange, in_routing_key, in_payload, in_content_type, v_properties, v_headers);
     RETURN event_id;
 END
 $BODY$;
@@ -107,30 +107,30 @@ The queue name is added to the AMQP headers message property under the key "pgq_
 
 This function requires the uuid-ossp extension.
 
-INPUTS: queue - the queue the message was sent to
-        exchange - the exchange the message should be published to
-        routing_key - the routing key the message should be published with
-        payload - the payload that should have been sent
-        content_type - AMQP content_type property for the message
+INPUTS: in_queue - the queue the message was sent to
+        in_exchange - the exchange the message should be published to
+        in_routing_key - the routing key the message should be published with
+        in_payload - the payload that should have been sent
+        in_content_type - AMQP content_type property for the message
 OUTPUTS: pgq event ID';
 
-CREATE OR REPLACE FUNCTION mikkoo.insert_event(queue text, exchange text, routing_key text, payload text, content_type text)
+CREATE OR REPLACE FUNCTION mikkoo.insert_event(in_queue text, in_exchange text, in_routing_key text, in_payload text, in_content_type text)
 RETURNS BIGINT
 LANGUAGE plpgsql
 SECURITY DEFINER
 VOLATILE STRICT
 AS $BODY$
 DECLARE
-    event_id BIGINT;
-    message_id UUID;
-    headers TEXT;
-    properties TEXT;
+    v_event_id BIGINT;
+    v_message_id UUID;
+    v_headers TEXT;
+    v_properties TEXT;
 BEGIN
-    SELECT uuid_generate_v4 INTO message_id FROM public.uuid_generate_v4();
-    headers := '{"pgq_queue": "' || queue || '"}';
-    properties := '{"message_id": "' || message_id || '"}';
-    SELECT insert_event INTO event_id FROM pgq.insert_event(queue, routing_key, payload, exchange, content_type, properties, headers);
-    RETURN event_id;
+    SELECT uuid_generate_v4 INTO v_message_id FROM public.uuid_generate_v4();
+    v_headers := '{"pgq_queue": "' || in_queue || '"}';
+    v_properties := '{"message_id": "' || v_message_id || '"}';
+    SELECT insert_event INTO v_event_id FROM pgq.insert_event(in_queue, in_routing_key, in_payload, in_exchange, in_content_type, v_properties, v_headers);
+    RETURN v_event_id;
 END
 $BODY$;
 
@@ -139,30 +139,30 @@ Inserts an event into the specified pgq queue.
 A message_id is automatically generated and set in the AMQP message properties.
 The queue name is added to the AMQP headers message property under the key "pgq_queue"
 
-INPUTS: queue - the queue the message was sent to
-        exchange - the exchange the message should be published to
-        routing_key - the routing key the message should be published with
-        payload - the payload that should have been sent
-        content_type - AMQP content_type property for the message
+INPUTS: in_queue - the queue the message was sent to
+        in_exchange - the exchange the message should be published to
+        in_routing_key - the routing key the message should be published with
+        in_payload - the payload that should have been sent
+        in_content_type - AMQP content_type property for the message
 OUTPUTS: pgq event ID';
 
-CREATE OR REPLACE FUNCTION mikkoo.insert_event(queue text, exchange text, routing_key text, payload text, content_type text, properties text, headers text)
+CREATE OR REPLACE FUNCTION mikkoo.insert_event(in_queue text, in_exchange text, in_routing_key text, in_payload text, in_content_type text, in_properties text, in_headers text)
 RETURNS BIGINT
 LANGUAGE SQL
 SECURITY DEFINER
 VOLATILE STRICT
 AS $BODY$
-    SELECT insert_event FROM pgq.insert_event(queue, routing_key, payload, exchange, content_type, properties, headers);
+    SELECT insert_event FROM pgq.insert_event(in_queue, in_routing_key, in_payload, in_exchange, in_content_type, in_properties, in_headers);
 $BODY$;
 
 COMMENT ON FUNCTION mikkoo.insert_event(text, text, text, text, text, text, text)  IS '
 Inserts an event into the specified pgq queue.
 
-INPUTS: queue - the queue the message was sent to
-        exchange - the exchange the message should be published to
-        routing_key - the routing key the message should be published with
-        payload - the payload that should have been sent
-        content_type - AMQP content_type property for the message
-        properties - AMQP message properties
-        headers - AMQP headers message property
+INPUTS: in_queue - the queue the message was sent to
+        in_exchange - the exchange the message should be published to
+        in_routing_key - the routing key the message should be published with
+        in_payload - the payload that should have been sent
+        in_content_type - AMQP content_type property for the message
+        in_properties - AMQP message properties
+        in_headers - AMQP headers message property
 OUTPUTS: pgq event ID';
