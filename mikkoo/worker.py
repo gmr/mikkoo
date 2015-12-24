@@ -307,8 +307,10 @@ class Process(multiprocessing.Process, state.State):
             batch = {}
 
         if batch.get('next_batch') is None:
+            self.statsd_incr('empty_queue')
             LOGGER.debug('Sleeping for %.2f seconds', self.wait_duration)
             self.set_state(self.STATE_IDLE)
+            self.statsd_add_timing('sleep', self.wait_duration)
             self.ioloop.add_timeout(self.ioloop.time() + self.wait_duration,
                                     self.process_batch)
             return
