@@ -52,6 +52,12 @@ should be used with the following field mappings:
 .. [2] If ``ev_extra4`` is specified and is a JSON key/value dictionary, it will
        be assigned to the ``headers`` AMQP property.
 
+There is a convenience schema in the `mikkoo.sql <mikkoo.sql>`_ file that adds
+stored procedures for creating properly formatted mikkoo events in PgQ. In
+addition, there is are auditing functions that allow for the creation of an
+audit-log of events that were sent to PgQ.
+
+
 AMQP Message Properties
 ^^^^^^^^^^^^^^^^^^^^^^^
 The following table defines the available fields that can be set in a JSON blob
@@ -134,6 +140,10 @@ Configuration
 The Mikkoo configuration file uses `YAML <http://yaml.org>`_ for markup and allows
 for one or more PgQ queue to be processed.
 
+If you have a Sentry or a Sentry account, the ``Application/sentry_dsn`` setting
+will turn on sentry exception logging, if the
+`raven <https://pypi.python.org/pypi/raven>`_ client library is installed.
+
 Queues are configured by name under the ``Application/workers`` stanza. The
 following example configures two workers for the processing of a queue named
 ``invoices``. Each worker process connects to a local PostgreSQL and RabbitMQ
@@ -183,6 +193,7 @@ The following is an example of a full configuration file:
     Application:
 
       poll_interval: 10
+      sentry_dsn: [YOUR SENTRY DSN]
 
       statsd:
         enabled: true

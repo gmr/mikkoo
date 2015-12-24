@@ -11,6 +11,7 @@ import json
 import logging
 import multiprocessing
 import signal
+import sys
 import time
 import uuid
 
@@ -108,8 +109,10 @@ class Process(multiprocessing.Process, state.State):
             self.session = queries.Session(self.config.get('postgres_url'),
                                            pool_max_size=1)
         except queries.OperationalError as error:
+            self.send_exception_to_sentry()
             LOGGER.error('Error connecting to PostgreSQL: %s', error)
-            self.stop()
+            return False
+        return True
 
     def callproc(self, name, *args):
         """Call the stored procedure in PostgreSQL with the specified
@@ -126,9 +129,11 @@ class Process(multiprocessing.Process, state.State):
             try:
                 return self.session.callproc(name, args or [])
             except queries.InternalError as error:
+                self.send_exception_to_sentry()
                 self.log_db_error(name, error)
                 raise PgQError(str(error))
             except queries.Error as error:
+                self.send_exception_to_sentry()
                 self.log_db_error(name, error)
 
     def log_db_error(self, name, error):
@@ -165,6 +170,7 @@ class Process(multiprocessing.Process, state.State):
 
         """
         LOGGER.critical('Could not connect to RabbitMQ: %r', (args, kwargs))
+        self.statsd_incr('amqp.connection_failed')
         self.on_ready_to_stop()
 
     def on_connect_open(self, conn):
@@ -176,6 +182,7 @@ class Process(multiprocessing.Process, state.State):
 
         """
         LOGGER.debug('Connection opened')
+        self.statsd_incr('amqp.connection_opened')
         self.connection = conn
         conn.add_on_connection_blocked_callback(self.on_connection_blocked)
         conn.add_on_connection_unblocked_callback(self.on_connection_unblocked)
@@ -189,6 +196,7 @@ class Process(multiprocessing.Process, state.State):
 
         """
         LOGGER.warning('RabbitMQ is blocking the connection')
+        self.statsd_incr('amqp.connection_blocked')
         self.set_state(self.STATE_BLOCKED)
 
     def on_connection_unblocked(self, _frame):
@@ -199,6 +207,7 @@ class Process(multiprocessing.Process, state.State):
 
         """
         LOGGER.info('RabbitMQ is no longer blocking the connection')
+        self.statsd_incr('amqp.connection_unblocked')
         # If we were blocked while processing, resume
         if self.event_list:
             LOGGER.debug('Resuming the processing of %i events',
@@ -220,6 +229,7 @@ class Process(multiprocessing.Process, state.State):
         LOGGER.critical('Connection from RabbitMQ closed in state %s (%s, %s)',
                         self.state_description, code, text)
         self.channel = None
+        self.statsd_incr('amqp.connection_closed')
         if not self.is_shutting_down and not self.is_waiting_to_shutdown:
             self.on_ready_to_stop()
 
@@ -237,6 +247,7 @@ class Process(multiprocessing.Process, state.State):
 
         """
         LOGGER.debug('Channel %i opened', channel.channel_number)
+        self.statsd_incr('amqp.channel_opened')
         self.channel = channel
         self.channel.add_on_close_callback(self.on_channel_closed)
         if self.confirm:
@@ -263,6 +274,7 @@ class Process(multiprocessing.Process, state.State):
         """
         LOGGER.warning('Channel %i closed: (%s) %s',
                        channel.channel_number, reply_code, reply_text)
+        self.statsd_incr('amqp.channel_closed')
         if concurrent.is_future(self.event_processed):
             self.set_state(self.STATE_RECONNECTING)
 
@@ -348,7 +360,6 @@ class Process(multiprocessing.Process, state.State):
         self.event_processed.add_done_callback(self.on_event_processed)
         self.current_event = event = self.event_list.pop(0)
 
-        #LOGGER.debug('Processing event %i', event['ev_id'])
         self.statsd_incr('publish.{0}.{1}'.format(event['ev_extra1'],
                                                   event['ev_type']))
         try:
@@ -358,6 +369,7 @@ class Process(multiprocessing.Process, state.State):
                                        self.build_properties_kwargs(event),
                                        mandatory=True)
         except TypeError as error:
+            self.send_exception_to_sentry()
             message = 'Error building kwargs for the event: {0}'.format(error)
             self.event_processed.set_exception(EventError(event, message))
         if not self.confirm:
@@ -411,6 +423,7 @@ class Process(multiprocessing.Process, state.State):
         # Acks occur event on a basic_return.
         if self.event_processed and self.current_event:
             LOGGER.debug('Event %s confirmed', self.current_event['ev_id'])
+            self.statsd_incr('amqp.publisher_confirm')
             self.event_processed.set_result(True)
 
     def on_publish_return(self, _channel, method, _properties, _body):
@@ -430,6 +443,7 @@ class Process(multiprocessing.Process, state.State):
         LOGGER.debug('Event %s was returned as (%s) %s from RabbitMQ',
                      self.current_event['ev_id'], method.reply_code,
                      method.reply_text)
+        self.statsd_incr('amqp.message_returned')
         self.event_processed.set_exception(EventError(self.current_event,
                                                       method.reply_text))
 
@@ -468,16 +482,28 @@ class Process(multiprocessing.Process, state.State):
         """
         self.setup()
         if not self.is_stopped:
+            LOGGER.info('%s worker started', self.name)
             try:
                 self.ioloop.start()
             except KeyboardInterrupt:
                 LOGGER.warning('CTRL-C while waiting for clean shutdown')
+            except Exception:
+                self.send_exception_to_sentry()
 
     def setup(self):
         """Ensure that all the things that are required are setup when the
         Process is started.
 
         """
+        if raven and 'sentry_dsn' in self._kwargs['config']:
+            options = {
+                'include_paths': ['mikkoo', 'pika', 'psycopg2', 'queries',
+                                  'tornado']
+            }
+            self.sentry_client = \
+                raven.Client(self._kwargs['config']['sentry_dsn'], **options)
+            self.set_sentry_context('worker', self.name)
+
         self.config = self._kwargs['config']['worker']
         self.confirm = self.config.get('confirm', False)
         self.consumer_name = self.config.get('consumer_name',
@@ -489,8 +515,10 @@ class Process(multiprocessing.Process, state.State):
         self.wait_duration = self.config.get('wait_duration',
                                              self.DEFAULT_WAIT_DURATION)
 
-        self.setup_signal_handlers()
-        self.ioloop = ioloop.IOLoop.current()
+        if not self.connect_to_postgres():
+            LOGGER.info('Could not connect to PostgreSQL, stopping')
+            self.set_state(self.STATE_STOPPED)
+            return
 
         self.stats = stats.Stats(self.name,
                                  self._kwargs['worker_name'],
@@ -499,9 +527,11 @@ class Process(multiprocessing.Process, state.State):
         self.stats[self.PROCESSED] = 0
         self.stats[self.PENDING] = 0
 
-        self.connect_to_postgres()
         self.create_queue()
         self.register_consumer()
+
+        self.setup_signal_handlers()
+        self.ioloop = ioloop.IOLoop.current()
 
         self.ioloop.add_callback(self.connect_to_rabbitmq)
 
@@ -586,7 +616,7 @@ class Process(multiprocessing.Process, state.State):
         """
         LOGGER.debug('on_sigprof')
         signal.siginterrupt(signal.SIGPROF, False)
-        self.ioloop.add_callback(self.submit_stats_report)
+        self.ioloop.add_callback_from_signal(self.submit_stats_report)
 
     def submit_stats_report(self):
         """Invoked by the IOLoop"""
@@ -628,6 +658,14 @@ class Process(multiprocessing.Process, state.State):
             self.stats.statsd.stop()
 
         self.on_ready_to_stop()
+
+    def send_exception_to_sentry(self):
+        """Send an exception to Sentry if enabled.
+        :param tuple exc_info: exception information as returned from
+            :func:`sys.exc_info`
+        """
+        if self.sentry_client:
+            self.sentry_client.captureException(sys.exc_info())
 
     def set_sentry_context(self, tag, value):
         """Set a context tag in Sentry for the given key and value.

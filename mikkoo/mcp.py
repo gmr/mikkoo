@@ -28,14 +28,15 @@ class Worker(object):
     """
     def __init__(self, config, stats_queue):
         self.config = config
-        self.last_process = 0
         self.process = None
         self.stats_queue = stats_queue
+        self.unresponsive = 0
 
 
 class MasterControlProgram(state.State):
     """Master Control Program keeps track of and manages worker processes."""
 
+    MAX_UNRESPONSIVE = 3
     MAX_SHUTDOWN_WAIT = 10
     POLL_INTERVAL = 60.0
     POLL_RESULTS_INTERVAL = 3.0
@@ -48,7 +49,7 @@ class MasterControlProgram(state.State):
 
         """
         self.set_process_name()
-        LOGGER.info('mikkoo v%s initializing', __version__)
+        LOGGER.info('Mikkoo v%s initializing', __version__)
         super(MasterControlProgram, self).__init__()
         self.config = config
 
@@ -127,11 +128,15 @@ class MasterControlProgram(state.State):
         }
 
     def check_processes(self):
-        """Check for the minimum worker process levels and start up new
-        processes needed.
-
-        """
+        """Check to make sure the worker processes are working..."""
         LOGGER.debug('Checking worker processes')
+        for name in self.workers.keys():
+            if self.workers[name].unresponsive >= self.MAX_UNRESPONSIVE:
+                if self.workers[name].process:
+                    LOGGER.info('Killing unresponsive %s worker', name)
+                    os.kill(int(self.workers[name].process.pid),
+                            signal.SIGKILL)
+                self.workers[name].process = None
         for name in self.workers.keys():
             if (not self.workers[name].process or
                     not self.workers[name].process.is_alive()):
@@ -222,14 +227,17 @@ class MasterControlProgram(state.State):
             LOGGER.warning('%i process(es) did not respond with stats: %r',
                            len(self.poll_data['processes']),
                            self.poll_data['processes'])
+            for name in self.poll_data['processes']:
+                self.workers[name].unresponsive += 1
 
-        for key in self.stats['workers'].keys():
+        for name in self.stats['workers'].keys():
+            self.workers[name].unresponsive = 0
             LOGGER.info('%s worker processed %i events with %i errors '
-                        'in %i batches with %i pending events', key,
-                        self.stats['workers'][key][worker.Process.PROCESSED],
-                        self.stats['workers'][key][worker.Process.ERROR],
-                        self.stats['workers'][key][worker.Process.BATCHES],
-                        self.stats['workers'][key][worker.Process.PENDING])
+                        'in %i batches with %i pending events', name,
+                        self.stats['workers'][name][worker.Process.PROCESSED],
+                        self.stats['workers'][name][worker.Process.ERROR],
+                        self.stats['workers'][name][worker.Process.BATCHES],
+                        self.stats['workers'][name][worker.Process.PENDING])
 
     def new_process(self, name):
         """Create a new worker instances
@@ -238,8 +246,7 @@ class MasterControlProgram(state.State):
         :return tuple: (str, process.Process)
 
         """
-        process_name = '%s-%s' % (name, self.new_process_number(name))
-        LOGGER.debug('Creating a new process for %s: %s', name, process_name)
+        LOGGER.debug('Creating a new %s process', name)
         kwargs = {
             'config': {
                 'statsd': self.config.application.get('statsd', {}),
@@ -249,18 +256,7 @@ class MasterControlProgram(state.State):
             'stats_queue': self.stats_queue,
             'worker_name': name,
         }
-        return process_name, worker.Process(name=process_name, kwargs=kwargs)
-
-    def new_process_number(self, name):
-        """Increment the counter for the process id number for a given worker
-        configuration.
-
-        :param str name: Consumer name
-        :rtype: int
-
-        """
-        self.workers[name].last_process += 1
-        return self.workers[name].last_process
+        return worker.Process(name=name, kwargs=kwargs)
 
     def on_abort(self, _signum, _unused_frame):
         LOGGER.debug('Abort signal received from child')
@@ -414,8 +410,8 @@ class MasterControlProgram(state.State):
         :param str name: The worker name
 
         """
-        process_name, process = self.new_process(name)
-        LOGGER.info('Spawning %s process for %s', process_name, name)
+        process = self.new_process(name)
+        LOGGER.info('Spawning %s process', name)
 
         # Append the process to the worker process list
         self.workers[name].process = process
