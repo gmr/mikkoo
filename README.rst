@@ -1,11 +1,37 @@
 Mikkoo
 ======
 A `PgQ <https://wiki.postgresql.org/wiki/SkyTools#PgQ>`_ to
-`RabbitMQ <https://www.rabbitmq.com>`_ relay.
+`RabbitMQ <https://www.rabbitmq.com>`_ relay. Mikkoo is a PgQ consumer that
+that publishes to RabbitMQ. In addition, it includes a built in auditing
+system that can be used to confirm that all PgQ events are received by
+RabbitMQ.
 
 Mikkoo is named for the rabbit in the "Clever Rabbit and the Elephant" fable.
 
 |Version| |Downloads| |Status|
+
+Installation
+------------
+Mikkoo is available on the `Python Package Index <https://pypi.python.org/pypi/mikkoo>`_
+and can be installed via `pip`:
+
+.. code:: bash
+
+    pip install mikkoo
+    
+Once you've setup `Skytools <https://wiki.postgresql.org/wiki/SkyTools>`_ you may want to
+install the optional included utility functions in `mikkoo.sql <mikkoo.sql>`_ to make usage 
+easier.
+
+You can do this with a combination of ``curl`` and ``psql``:
+
+.. code:: bash
+
+    curl -L https://github.com/gmr/mikkoo/blob/master/mikkoo.sql | psql
+
+This will install multiple stored procedures and an audit table in a mikkoo schema.
+Take a look at the DDL to get a good idea of what each funciton is and how it can
+be used. 
 
 PgQ Setup
 ---------
@@ -253,6 +279,31 @@ The following is an example of a full configuration file:
         propagate: true
       disable_existing_loggers: true
       incremental: false
+      
+Running Mikkoo
+--------------
+After creating a configuration file for Mikkoo like the one above, simply run the mikkoo application providing the path to the configuration file:
+
+.. code:: bash
+    
+    mikkoo -c mikkoo.yml
+    
+The application will attempt to daemonize unless you use the ``-f`` foreground CLI switch.
+
+Mikkoo's CLI help can be invoked with ``--help`` and yields the following output:
+
+.. code:: bash
+
+    $ mikkoo -h
+    usage: mikkoo [-h] [-c CONFIG] [-f]
+    
+    Mikkoo is a PgQ to RabbitMQ Relay
+    
+    optional arguments:
+      -h, --help            show this help message and exit
+      -c CONFIG, --config CONFIG
+                            Path to the configuration file
+      -f, --foreground      Run the application interactively
 
 
 .. |Version| image:: https://img.shields.io/pypi/v/mikkoo.svg?
