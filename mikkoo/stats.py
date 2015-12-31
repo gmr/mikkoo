@@ -54,9 +54,6 @@ class Stats(object):
             self.previous = dict()
             for key in self.counter:
                 self.previous[key] = 0
-        if self.statsd:
-            for item in self.counter.keys():
-                self.statsd.incr(item, self.diff(item))
         values = {
             'name': self.name,
             'counts': dict(self.counter),
