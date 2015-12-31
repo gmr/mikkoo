@@ -26,7 +26,7 @@ class StatsdClient(object):
     def __init__(self, name, settings):
         """
 
-        :param str name: The name of the consumer for this client
+        :param str name: The name of the worker for this client
         :param dict settings: statsd Settings
 
         """
