@@ -181,7 +181,7 @@ class Process(multiprocessing.Process, state.State):
         :type conn: pika.adapters.tornado_connection.TornadoConnection
 
         """
-        LOGGER.debug('Connection opened')
+        LOGGER.info('Connection to RabbitMQ established')
         self.statsd_incr('amqp.connection_opened')
         self.connection = conn
         conn.add_on_connection_blocked_callback(self.on_connection_blocked)
@@ -230,8 +230,11 @@ class Process(multiprocessing.Process, state.State):
                         self.state_description, code, text)
         self.channel = None
         self.statsd_incr('amqp.connection_closed')
-        if not self.is_shutting_down and not self.is_waiting_to_shutdown:
+        if self.is_shutting_down or self.is_waiting_to_shutdown:
             self.on_ready_to_stop()
+        else:
+            LOGGER.info('Reconnecting to RabbitMQ')
+            self.ioloop.add_callback(self.connect_to_rabbitmq)
 
     def open_channel(self):
         """Open a channel on the existing open connection to RabbitMQ"""

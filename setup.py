@@ -24,7 +24,7 @@ if sys.version_info < (2, 7, 0):
     install_requires.append('backport_collections')
 
 setup(name='mikkoo',
-      version='0.4.3',
+      version='0.4.4',
       description='Mikkoo is a PgQ to RabbitMQ Relay',
       long_description=open('README.rst').read(),
       classifiers=classifiers,
