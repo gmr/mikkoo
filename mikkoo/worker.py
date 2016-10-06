@@ -216,6 +216,7 @@ class Process(multiprocessing.Process, state.State):
             self.ioloop.add_callback(self.process_event)
         else:
             self.set_state(self.STATE_IDLE)
+            self.ioloop.add_callback(self.process_batch)
 
     def on_closed(self, _unused, code, text):
         """This method is invoked by pika when the connection to RabbitMQ is
