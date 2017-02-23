@@ -18,9 +18,9 @@ and can be installed via `pip`:
 .. code:: bash
 
     pip install mikkoo
-    
+
 Once you've setup `Skytools <https://wiki.postgresql.org/wiki/SkyTools>`_ you may want to
-install the optional included utility functions in `mikkoo.sql <mikkoo.sql>`_ to make usage 
+install the optional included utility functions in `mikkoo.sql <mikkoo.sql>`_ to make usage
 easier.
 
 You can do this with a combination of ``curl`` and ``psql``:
@@ -31,7 +31,7 @@ You can do this with a combination of ``curl`` and ``psql``:
 
 This will install multiple stored procedures and an audit table in a mikkoo schema.
 Take a look at the DDL to get a good idea of what each funciton is and how it can
-be used. 
+be used.
 
 PgQ Setup
 ---------
@@ -70,6 +70,10 @@ should be used with the following field mappings:
 | ``ev_extra3`` | AMQP Properties [1]_  |
 +---------------+-----------------------+
 | ``ev_extra4`` | Headers [2]_          |
++---------------+-----------------------+
+| ``ev_time``   | Headers.timetamp      |
++---------------+-----------------------+
+| ``ev_txid``   | Headers.txid          |
 +---------------+-----------------------+
 
 .. [1] AMQP properties should be set as a JSON blob. Values set in the ``ev_extra3``
@@ -123,6 +127,17 @@ Values assigned in the JSON blob provided to ``ev_extra3`` take precedence over
 the automatically assigned ``app_id``, ``content_type``, ``correlation_id``,
 ``headers``, and ``timestamp`` values created by Mikkoo at processing time.
 
+As of 1.0, Mikkoo will automatically add four AMQP headers property values. These
+values will not overwrite any values with the same name specified in ``ev_extra4``.
+overwriting values with the same name, even if they are specified in the
+The ``sequence`` value is a dynamically generated ID that attempts to provide
+fuzzy distributed ordering information. The ``timestamp`` value is the ISO-8601
+representation of the ``ev_time`` field, which is created when an event is added
+to PgQ. The ``txid`` value is the ``ev_txid`` value, the PgQ transaction ID for
+the event.  These values are added to help provide some level of deterministic
+ordering. The ``origin`` value is the hostname of the server that Mikkoo is running
+on.
+
 Event Insertion Example
 -----------------------
 
@@ -147,19 +162,31 @@ When this message is received by RabbitMQ it will have a message body of:
 
 And it will have message properties similar to the following:
 
-+----------------------+------------------------------------------+
-| Property             | Example Value                            |
-+======================+==========================================+
-| ``app_id``           | ``mikkoo``                               |
-+----------------------+------------------------------------------+
-| ``content_type``     | ``application/json``                     |
-+----------------------+------------------------------------------+
-| ``correlation_id``   | ``0ad6b212-4c84-4eb0-8782-9a44bdfe949f`` |
-+----------------------+------------------------------------------+
-| ``timestamp``        | ``1449600290``                           |
-+----------------------+------------------------------------------+
-| ``type``             | ``example``                              |
-+----------------------+------------------------------------------+
++----------------------+-------------------------------------------------------+
+| Property             | Example Value                                         |
++======================+=======================================================+
+| ``app_id``           | ``mikkoo``                                            |
++----------------------+-------------------------------------------------------+
+| ``content_type``     | ``application/json``                                  |
++----------------------+-------------------------------------------------------+
+| ``correlation_id``   | ``0ad6b212-4c84-4eb0-8782-9a44bdfe949f``              |
++----------------------+-------------------------------------------------------+
+| ``headers``          | +---------------+-----------------------------------+ |
+|                      | | Key           | Example Value                     | |
+|                      | +===============+===================================+ |
+|                      | | ``origin``    | ``mikkoo.domain.com``             | |
+|                      | +---------------+-----------------------------------+ |
+|                      | | ``sequence``  | ``4539586784185129828``           | |
+|                      | +---------------+-----------------------------------+ |
+|                      | | ``timestamp`` | ``2017-02-23 06:17:14.471682-00`` | |
+|                      | +---------------+-----------------------------------+ |
+|                      | | ``txid``      | ``41356335556``                   | |
+|                      | +---------------+-----------------------------------+ |
++----------------------+-------------------------------------------------------+
+| ``timestamp``        | ``1449600290``                                        |
++----------------------+-------------------------------------------------------+
+| ``type``             | ``example``                                           |
++----------------------+-------------------------------------------------------+
 
 Configuration
 -------------
@@ -279,15 +306,15 @@ The following is an example of a full configuration file:
         propagate: true
       disable_existing_loggers: true
       incremental: false
-      
+
 Running Mikkoo
 --------------
 After creating a configuration file for Mikkoo like the one above, simply run the mikkoo application providing the path to the configuration file:
 
 .. code:: bash
-    
+
     mikkoo -c mikkoo.yml
-    
+
 The application will attempt to daemonize unless you use the ``-f`` foreground CLI switch.
 
 Mikkoo's CLI help can be invoked with ``--help`` and yields the following output:
@@ -296,9 +323,9 @@ Mikkoo's CLI help can be invoked with ``--help`` and yields the following output
 
     $ mikkoo -h
     usage: mikkoo [-h] [-c CONFIG] [-f]
-    
+
     Mikkoo is a PgQ to RabbitMQ Relay
-    
+
     optional arguments:
       -h, --help            show this help message and exit
       -c CONFIG, --config CONFIG

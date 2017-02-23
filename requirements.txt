@@ -3,3 +3,4 @@ helper>2.4,<2.5
 pika>=0.10,<1
 psutil>=3.3.0,<3.4.0
 queries>=1.8.1,<2
+simpleflake=0.1.5

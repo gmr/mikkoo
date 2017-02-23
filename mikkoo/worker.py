@@ -1,7 +1,7 @@
 """
 Mikkoo Worker Process
 =====================
-Connects to PostgreSQL and processes PgQ batches, publishing the events in
+Connects to Postgres and processes PgQ batches, publishing the events in
 the batch to RabbitMQ.
 
 """
@@ -11,15 +11,16 @@ import json
 import logging
 import multiprocessing
 import signal
+import socket
 import sys
 import time
 import uuid
 
 import arrow
-from tornado import concurrent
-from tornado import ioloop
+from tornado import concurrent, ioloop
 import pika
 import queries
+import simpleflake
 
 try:
     import raven
@@ -71,51 +72,62 @@ class Process(multiprocessing.Process, state.State):
         super(Process, self).__init__(group, target, name, args, kwargs)
         self.channel = None
         self.connection = None
-        self.config = None
-        self.confirm = True
-        self.consumer_name = self.DEFAULT_CONSUMER_NAME
+        self.config = kwargs['config']
+
+        self.confirm = kwargs['config']['worker'].get('confirm', False)
+        self.consumer_name = kwargs['config']['worker'].get(
+            'consumer_name', self.DEFAULT_CONSUMER_NAME)
         self.current_batch = None
         self.current_event = None
         self.event_list = None
         self.event_processed = None
         self.ioloop = None
         self.last_stats_time = None
-        self.maximum_failures = self.DEFAULT_MAX_FAILURES
+        self.maximum_failures = kwargs['config']['worker'].get(
+            'max_failures', self.DEFAULT_MAX_FAILURES)
         self.prepend_path = None
-        self.retry_interval = self.DEFAULT_RETRY_INTERVAL
+        self.retry_interval = kwargs['config']['worker'].get(
+            'retry_interval', self.DEFAULT_RETRY_INTERVAL)
         self.sentry_client = None
         self.session = None
         self.state = self.STATE_INITIALIZING
         self.state_start = time.time()
-        self.stats = None
-        self.wait_duration = self.DEFAULT_WAIT_DURATION
+        self.stats = stats.Stats(self.name, kwargs['worker_name'],
+                                 kwargs['config'].get('statsd', {}))
+        self.wait_duration = kwargs['config']['worker'].get(
+            'wait_duration', self.DEFAULT_WAIT_DURATION)
+        self.worker_config = kwargs['config']['worker']
+        self.worker_name = kwargs['worker_name']
+
+        if raven and 'sentry_dsn' in self.config:
+            self.sentry_client = raven.Client(
+                self.config['sentry_dsn'], **{
+                    'include_paths': ['arrow',
+                                      'mikkoo',
+                                      'pika',
+                                      'psycopg2',
+                                      'queries',
+                                      'simpleflake',
+                                      'tornado']})
+            self.set_sentry_context('worker', self.name)
 
         # Override ACTIVE with PROCESSING
         self.STATES[0x04] = 'Processing'
 
-    @property
-    def worker_name(self):
-        """Return the queue to populate with runtime stats
-
-        :rtype: multiprocessing.Queue
-
-        """
-        return self._kwargs['worker_name']
-
     def connect_to_postgres(self):
-        """Connects to PostgreSQL, shutting down the worker on failure"""
-        LOGGER.debug('Connecting to PostgreSQL')
+        """Connects to Postgres, shutting down the worker on failure"""
+        LOGGER.debug('Connecting to Postgres')
         try:
-            self.session = queries.Session(self.config.get('postgres_url'),
-                                           pool_max_size=1)
+            self.session = queries.Session(
+                self.worker_config.get('postgres_url'), pool_max_size=1)
         except queries.OperationalError as error:
             self.send_exception_to_sentry()
-            LOGGER.error('Error connecting to PostgreSQL: %s', error)
+            LOGGER.error('Error connecting to Postgres: %s', error)
             return False
         return True
 
     def callproc(self, name, *args):
-        """Call the stored procedure in PostgreSQL with the specified
+        """Call the stored procedure in Postgres with the specified
         arguments.
 
         :param str name: The stored procedure name
@@ -151,7 +163,7 @@ class Process(multiprocessing.Process, state.State):
     def connect_to_rabbitmq(self):
         """Connect to RabbitMQ returning the connection handle."""
         self.set_state(self.STATE_CONNECTING)
-        params = pika.URLParameters(self.config.get('rabbitmq_url'))
+        params = pika.URLParameters(self.worker_config.get('rabbitmq_url'))
         LOGGER.debug('Connecting to %s:%i:%s as %s',
                      params.host, params.port, params.virtual_host,
                      params.credentials.username)
@@ -407,6 +419,14 @@ class Process(multiprocessing.Process, state.State):
             for key in properties:
                 if key.encode('ascii') in self.VALID_PROPERTIES:
                     kwargs[key.encode('ascii')] = properties[key]
+        if 'headers' not in kwargs:
+            kwargs['headers'] = {}
+
+        kwargs['headers'].setdefault('origin', socket.getfqdn())
+        kwargs['headers'].setdefault('sequence', simpleflake.simpleflake())
+        kwargs['headers'].setdefault('txid', event['ev_txid'])
+        kwargs['headers'].setdefault(
+            'timestamp', arrow.get(event['ev_time']).to('utc').isoformat())
         return pika.BasicProperties(**kwargs)
 
     @staticmethod
@@ -501,34 +521,12 @@ class Process(multiprocessing.Process, state.State):
         Process is started.
 
         """
-        if raven and 'sentry_dsn' in self._kwargs['config']:
-            options = {
-                'include_paths': ['mikkoo', 'pika', 'psycopg2', 'queries',
-                                  'tornado']
-            }
-            self.sentry_client = \
-                raven.Client(self._kwargs['config']['sentry_dsn'], **options)
-            self.set_sentry_context('worker', self.name)
-
-        self.config = self._kwargs['config']['worker']
-        self.confirm = self.config.get('confirm', False)
-        self.consumer_name = self.config.get('consumer_name',
-                                             self.DEFAULT_CONSUMER_NAME)
-        self.maximum_failures = self.config.get('max_failures',
-                                                self.DEFAULT_MAX_FAILURES)
-        self.retry_interval = self.config.get('retry_interval',
-                                              self.DEFAULT_RETRY_INTERVAL)
-        self.wait_duration = self.config.get('wait_duration',
-                                             self.DEFAULT_WAIT_DURATION)
 
         if not self.connect_to_postgres():
-            LOGGER.info('Could not connect to PostgreSQL, stopping')
+            LOGGER.info('Could not connect to Postgres, stopping')
             self.set_state(self.STATE_STOPPED)
             return
 
-        self.stats = stats.Stats(self.name,
-                                 self._kwargs['worker_name'],
-                                 self._kwargs['config']['statsd'])
         self.stats[self.ERROR] = 0
         self.stats[self.PROCESSED] = 0
         self.stats[self.PENDING] = 0
@@ -585,7 +583,7 @@ class Process(multiprocessing.Process, state.State):
         signal.signal(signal.SIGTERM, signal.SIG_IGN)
 
         # Unregister the consumer from PgQ
-        if self._kwargs['config']['worker'].get('unregister', True):
+        if self.worker_config.get('unregister', True):
             self.unregister_consumer()
 
         # If the connection is still around, close it

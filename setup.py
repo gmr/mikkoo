@@ -1,14 +1,15 @@
 from setuptools import setup
-import sys
 
-classifiers = ['Development Status :: 3 - Alpha',
+from mikkoo import __version__
+
+classifiers = ['Development Status :: 5 - Production/Stable',
                'Programming Language :: Python :: 2',
-               'Programming Language :: Python :: 2.6',
                'Programming Language :: Python :: 2.7',
                'Programming Language :: Python :: 3',
                'Programming Language :: Python :: 3.4',
                'Programming Language :: Python :: 3.5',
                'Programming Language :: Python :: Implementation :: CPython',
+               'Programming Language :: Python :: Implementation :: PyPy',
                'License :: OSI Approved :: BSD License']
 
 install_requires = ['arrow>=0.7.0,<1',
@@ -16,15 +17,13 @@ install_requires = ['arrow>=0.7.0,<1',
                     'pika>=0.10.0',
                     'psutil>=3.3.0',
                     'queries>=1.8.1,<2',
+                    'simpleflake==0.1.5',
                     'tornado>=4.2,<4.3']
 
 extras_require = {'sentry': ['raven']}
 
-if sys.version_info < (2, 7, 0):
-    install_requires.append('backport_collections')
-
 setup(name='mikkoo',
-      version='0.4.5',
+      version=__version__,
       description='Mikkoo is a PgQ to RabbitMQ Relay',
       long_description=open('README.rst').read(),
       classifiers=classifiers,
