@@ -2,12 +2,10 @@ sudo: false
 language: python
 python:
   - 2.7
-  - pypy
-  - 3.3
-  - 3.4
   - 3.5
+  - 3.6
+  - 3.7
 install:
-  - if [[ $TRAVIS_PYTHON_VERSION == '2.6' ]]; then pip install unittest2; fi
   - pip install -r test-requirements.txt
   - python setup.py develop
 script: nosetests
