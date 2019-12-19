@@ -13,12 +13,12 @@ from mikkoo import statsd
 
 class Stats(object):
 
-    def __init__(self, name, worker_name, statsd_cfg):
+    def __init__(self, name, worker_name, statsd_cfg, failure_callback):
         self.name = name
         self.worker_name = worker_name
         self.statsd = None
         if statsd_cfg.get('enabled', False):
-            self.statsd = statsd.StatsdClient(name, statsd_cfg)
+            self.statsd = statsd.Client(name, statsd_cfg, failure_callback)
         self.counter = collections.Counter()
         self.previous = None
 
@@ -51,7 +51,7 @@ class Stats(object):
     def report(self):
         """Submit the stats data to both the MCP stats queue and statsd"""
         if not self.previous:
-            self.previous = dict()
+            self.previous = {}
             for key in self.counter:
                 self.previous[key] = 0
         values = {

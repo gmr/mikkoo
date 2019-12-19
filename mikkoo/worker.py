@@ -93,7 +93,8 @@ class Process(multiprocessing.Process, state.State):
         self.state = self.STATE_INITIALIZING
         self.state_start = time.time()
         self.stats = stats.Stats(self.name, kwargs['worker_name'],
-                                 kwargs['config'].get('statsd', {}))
+                                 kwargs['config'].get('statsd', {}),
+                                 self.on_statsd_failure)
         self.wait_duration = kwargs['config']['worker'].get(
             'wait_duration', self.DEFAULT_WAIT_DURATION)
         self.worker_config = kwargs['config']['worker']
@@ -621,6 +622,9 @@ class Process(multiprocessing.Process, state.State):
         LOGGER.debug('on_sigprof')
         signal.siginterrupt(signal.SIGPROF, False)
         self.ioloop.add_callback_from_signal(self.submit_stats_report)
+
+    def on_statsd_failure(self):
+        self.set_state(self.STATE_STOP_REQUESTED)
 
     def submit_stats_report(self):
         """Invoked by the IOLoop"""
