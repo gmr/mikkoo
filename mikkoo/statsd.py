@@ -87,11 +87,10 @@ class Client(object):
         """Return the """
         if self._setting('include_hostname', True):
             return self.PAYLOAD_HOSTNAME.format(
-                self._prefix, self._hostname, self._consumer_name, key, value,
+                self._prefix, self._hostname, self._name, key, value,
                 metric_type)
         return self.PAYLOAD_NO_HOSTNAME.format(
-            self._prefix, self._consumer_name, key, value,
-            metric_type)
+            self._prefix, self._name, key, value, metric_type)
 
     def _send(self, key, value, metric_type):
         """Send the specified value to the statsd daemon via UDP without a
