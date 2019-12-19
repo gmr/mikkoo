@@ -13,8 +13,8 @@ classifiers = ['Development Status :: 5 - Production/Stable',
                'License :: OSI Approved :: BSD License']
 
 install_requires = ['arrow>=0.7.0,<1',
-                    'helper>=2.4.1',
-                    'pika>=0.10.0',
+                    'helper>=2.4.1,<3',
+                    'pika>=0.10.0,<1',
                     'psutil>=3.3.0',
                     'queries>=1.8.1,<2',
                     'simpleflake==0.1.5',
