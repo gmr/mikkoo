@@ -1,19 +1,15 @@
 """Tests for mikkoo.worker"""
 import copy
 import multiprocessing
-try:
-    import unittest2 as unittest
-except ImportError:
-    import unittest
+import signal
+import unittest
 
 import mock
-
-from pika import channel
 import pika
-import signal
+import pika.adapters.tornado_connection
+from pika import channel
 
-from mikkoo import worker
-from mikkoo import __version__
+from mikkoo import worker, __version__
 
 from . import test_state
 
@@ -62,7 +58,7 @@ class TestProcess(test_state.TestState):
         return mock.Mock(spec=channel.Channel)
 
     def new_mock_connection(self):
-        return mock.Mock(spec=pika.TornadoConnection)
+        return mock.Mock(spec=pika.adapters.tornado_connection.TornadoConnection)
 
     def test_app_id(self):
         expectation = 'mikkoo/%s' % __version__
