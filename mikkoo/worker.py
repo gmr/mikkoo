@@ -19,6 +19,7 @@ import uuid
 import arrow
 from tornado import concurrent, ioloop
 import pika
+from pika.adapters import tornado_connection
 import queries
 import simpleflake
 
@@ -168,12 +169,9 @@ class Process(multiprocessing.Process, state.State):
         LOGGER.debug('Connecting to %s:%i:%s as %s',
                      params.host, params.port, params.virtual_host,
                      params.credentials.username)
-        return pika.TornadoConnection(params,
-                                      self.on_connect_open,
-                                      self.on_connect_failed,
-                                      self.on_closed,
-                                      False,
-                                      self.ioloop)
+        return tornado_connection.TornadoConnection(
+            params, self.on_connect_open, self.on_connect_failed,
+            self.on_closed, False, self.ioloop)
 
     def on_connect_failed(self, *args, **kwargs):
         """Connection to RabbitMQ failed, so shut things down.
