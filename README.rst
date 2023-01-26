@@ -336,7 +336,7 @@ Mikkoo's CLI help can be invoked with ``--help`` and yields the following output
 .. |Version| image:: https://img.shields.io/pypi/v/mikkoo.svg?
    :target: http://badge.fury.io/py/mikkoo
 
-.. |Status| image:: https://img.shields.io/travis/gmr/mikkoo.svg?
+.. |Status| image:: https://github.com/gmr/mikkoo/actions/workflows/testing.yaml/badge.svg?
    :target: https://travis-ci.org/gmr/mikkoo
 
 .. |Downloads| image:: https://img.shields.io/pypi/dm/mikkoo.svg?
