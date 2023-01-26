@@ -27,7 +27,7 @@ You can do this with a combination of ``curl`` and ``psql``:
 
 .. code:: bash
 
-    curl -L https://github.com/gmr/mikkoo/blob/master/mikkoo.sql | psql
+    curl -L https://github.com/gmr/mikkoo/blob/main/mikkoo.sql | psql
 
 This will install multiple stored procedures and an audit table in a mikkoo schema.
 Take a look at the DDL to get a good idea of what each funciton is and how it can
