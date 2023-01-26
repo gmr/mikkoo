@@ -38,14 +38,14 @@ Logging:
       handlers: [console]
       level: INFO
       propagate: true
-    mikkoo:
+    mikkoo.worker:
       handlers: [console]
       level: INFO
       propagate: true
-    #mikkoo.worker:
-    #  handlers: [console]
-    #  level: DEBUG
-    #  propagate: false
+    mikkoo.state:
+      handlers: [console]
+      level: WARNING
+      propagate: false
     pika:
       handlers: [console]
       level: ERROR

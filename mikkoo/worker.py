@@ -5,32 +5,36 @@ Connects to Postgres and processes PgQ batches, publishing the events in
 the batch to RabbitMQ.
 
 """
-import contextlib
+import asyncio
 import copy
+import datetime
 import json
 import logging
 import multiprocessing
+import os
 import signal
 import socket
 import sys
 import time
+import typing
 import uuid
 
 import arrow
-from tornado import concurrent, ioloop
+import helper.config
 import pika
-from pika.adapters import tornado_connection
-import queries
-import simpleflake
+import pika.channel
+import psycopg
+from pika import connection, exceptions, frame, spec
+from pika.adapters import asyncio_connection
+from psycopg import rows, sql
+from uuid_extensions import uuid7
 
 try:
-    import raven
+    import sentry_sdk
 except ImportError:
-    raven = None
+    sentry_sdk = None
 
-from mikkoo import __version__
-from mikkoo import state
-from mikkoo import stats
+from mikkoo import __version__, state, stats
 
 LOGGER = logging.getLogger(__name__)
 
@@ -71,240 +75,260 @@ class Process(multiprocessing.Process, state.State):
         if kwargs is None:
             kwargs = {}
         super(Process, self).__init__(group, target, name, args, kwargs)
-        self.channel = None
-        self.connection = None
         self.config = kwargs['config']
-
         self.confirm = kwargs['config']['worker'].get('confirm', False)
         self.consumer_name = kwargs['config']['worker'].get(
             'consumer_name', self.DEFAULT_CONSUMER_NAME)
-        self.current_batch = None
-        self.current_event = None
-        self.event_list = None
-        self.event_processed = None
-        self.ioloop = None
-        self.last_stats_time = None
+        self.current_batch: typing.Optional[int] = None
+        self.current_event: typing.Optional[dict] = None
+        self.event_list: typing.Optional[typing.List[dict]] = None
+        self.event_processed: typing.Optional[asyncio.Future] = None
+        self.ioloop: typing.Optional[asyncio.AbstractEventLoop] = None
+        self.last_stats_time: typing.Optional[float] = None
         self.maximum_failures = kwargs['config']['worker'].get(
             'max_failures', self.DEFAULT_MAX_FAILURES)
-        self.prepend_path = None
+        self.postgres: typing.Optional[psycopg.AsyncConnection] = None
+        self.rabbitmq: typing.Optional[
+            asyncio_connection.AsyncioConnection] = None
+        self.rabbitmq_channel: typing.Optional[pika.channel.Channel] = None
         self.retry_interval = kwargs['config']['worker'].get(
             'retry_interval', self.DEFAULT_RETRY_INTERVAL)
-        self.sentry_client = None
-        self.session = None
         self.state = self.STATE_INITIALIZING
         self.state_start = time.time()
-        self.stats = stats.Stats(self.name, kwargs['worker_name'],
-                                 kwargs['config'].get('statsd', {}),
-                                 self.on_statsd_failure)
+        self.stats = stats.Stats(
+            self.name,
+            kwargs['worker_name'],
+            kwargs['config'].get('statsd', {}))
+        self.stats_queue: multiprocessing.Queue = kwargs['stats_queue']
         self.wait_duration = kwargs['config']['worker'].get(
             'wait_duration', self.DEFAULT_WAIT_DURATION)
         self.worker_config = kwargs['config']['worker']
         self.worker_name = kwargs['worker_name']
 
-        if raven and 'sentry_dsn' in self.config:
-            self.sentry_client = raven.Client(
-                self.config['sentry_dsn'], **{
-                    'include_paths': ['arrow',
-                                      'mikkoo',
-                                      'pika',
-                                      'psycopg2',
-                                      'queries',
-                                      'simpleflake',
-                                      'tornado']})
-            self.set_sentry_context('worker', self.name)
+        if sentry_sdk and 'sentry_dsn' in self.config:
+            sentry_sdk.init(
+                self.config['sentry_dsn'],
+                release=__version__,
+                environment=os.getenv('ENVIRONMENT', 'unknown'),
+                in_app_include=['arrow',
+                                'mikkoo',
+                                'pika',
+                                'psycopg'])
+            sentry_sdk.set_context('mikkoo', {'worker': self.name})
 
         # Override ACTIVE with PROCESSING
         self.STATES[0x04] = 'Processing'
 
-    def connect_to_postgres(self):
+    async def connect_to_postgres(self) -> bool:
         """Connects to Postgres, shutting down the worker on failure"""
         LOGGER.debug('Connecting to Postgres')
         try:
-            self.session = queries.Session(
-                self.worker_config.get('postgres_url'), pool_max_size=1)
-        except queries.OperationalError as error:
+            self.postgres = await psycopg.AsyncConnection.connect(
+                self.worker_config.get('postgres_url'),
+                autocommit=True)
+        except psycopg.OperationalError as error:
             self.send_exception_to_sentry()
             LOGGER.error('Error connecting to Postgres: %s', error)
             return False
         return True
 
-    def callproc(self, name, *args):
+    def build_sql(self, proc_name: str, *args) -> str:
+        return sql.SQL('SELECT * FROM {proc_name}({values})'.format(
+            proc_name=proc_name,
+            values=','.join('%s' for _a in range(0, len(args))))).as_string(
+                self.postgres)
+
+    async def callproc(self, proc_name: str, *args) -> typing.Sequence[dict]:
         """Call the stored procedure in Postgres with the specified
         arguments.
 
-        :param str name: The stored procedure name
-        :param list args: The list of arguments to pass in to the stored proc
-        :rtype: :class:`~queries.Result`
-
         """
-        self.set_sentry_context('callproc', name)
-        LOGGER.debug('Executing %s with %r', name, args)
-        with self.statsd_track_duration('db.{0}.query_time'.format(name)):
-            try:
-                return self.session.callproc(name, args or [])
-            except queries.InternalError as error:
-                self.send_exception_to_sentry()
-                self.log_db_error(name, error)
-                raise PgQError(str(error))
-            except queries.Error as error:
-                self.send_exception_to_sentry()
-                self.log_db_error(name, error)
+        sentry_sdk.set_context('mikkoo', {'function': proc_name})
+        with self.stats.track_duration(f'db.{proc_name}.query_time'):
+            async with self.postgres.cursor(
+                    row_factory=rows.dict_row) as cursor:
+                try:
+                    await cursor.execute(
+                        self.build_sql(proc_name, *args), args or [])
+                    return await cursor.fetchall()
+                except psycopg.InternalError as error:
+                    self.send_exception_to_sentry()
+                    self.log_db_error(proc_name, error)
+                    raise PgQError(str(error))
+                except psycopg.Error as error:
+                    self.send_exception_to_sentry()
+                    self.log_db_error(proc_name, error)
 
-    def log_db_error(self, name, error):
-        """Log database errors and increment the statsd counter
-
-        :param str name: The stored procedure name
-        :param error: The exception
-        :type error: :class:`~queries.Error`
-
-        """
+    def log_db_error(self, name: str, error: Exception) -> typing.NoReturn:
+        """Log database errors and increment the stats counter"""
         LOGGER.error('Error executing %s.callproc: (%s) %s', name,
                      error.__class__.__name__, error)
-        self.statsd_incr('db.{0}.error.{1}'.format(name, str(error)))
+        self.stats.incr('db.{0}.error.{1}'.format(name, str(error)))
 
     def connect_to_rabbitmq(self):
         """Connect to RabbitMQ returning the connection handle."""
         self.set_state(self.STATE_CONNECTING)
-        params = pika.URLParameters(self.worker_config.get('rabbitmq_url'))
-        LOGGER.debug('Connecting to %s:%i:%s as %s',
-                     params.host, params.port, params.virtual_host,
-                     params.credentials.username)
-        return tornado_connection.TornadoConnection(
-            params, self.on_connect_open, self.on_connect_failed,
-            self.on_closed, False, self.ioloop)
+        return asyncio_connection.AsyncioConnection(
+            pika.URLParameters(self.worker_config.get('rabbitmq_url')),
+            on_open_callback=self.on_rabbitmq_open,
+            on_open_error_callback=self.on_rabbitmq_open_error,
+            on_close_callback=self.on_rabbitmq_closed)
 
-    def on_connect_failed(self, *args, **kwargs):
-        """Connection to RabbitMQ failed, so shut things down.
-
-        :param list args: Positional arguments
-        :param dict kwargs: Keyword arguments
-
-        """
-        LOGGER.critical('Could not connect to RabbitMQ: %r', (args, kwargs))
-        self.statsd_incr('amqp.connection_failed')
-        self.on_ready_to_stop()
-
-    def on_connect_open(self, conn):
+    def on_rabbitmq_open(self,
+                         conn: asyncio_connection.AsyncioConnection) \
+            -> typing.NoReturn:
         """This method is called by pika once the connection to RabbitMQ has
         been established. It passes the handle to the connection object in
         case we need it, but in this case, we'll just mark it unused.
 
-        :type conn: pika.adapters.tornado_connection.TornadoConnection
-
         """
         LOGGER.info('Connection to RabbitMQ established')
-        self.statsd_incr('amqp.connection_opened')
-        self.connection = conn
-        conn.add_on_connection_blocked_callback(self.on_connection_blocked)
-        conn.add_on_connection_unblocked_callback(self.on_connection_unblocked)
-        self.open_channel()
+        self.stats.incr('amqp.connection_opened')
+        self.rabbitmq = conn
 
-    def on_connection_blocked(self, _frame):
+        try:
+            self.rabbitmq.channel(
+                on_open_callback=self.on_rabbitmq_channel_open)
+        except exceptions.ConnectionClosed as err:
+            LOGGER.warning('Channel open on closed connection')
+            self.on_rabbitmq_closed(self.rabbitmq, err)
+            return
+
+        self.rabbitmq.add_on_connection_blocked_callback(
+            self.on_rabbitmq_blocked)
+        self.rabbitmq.add_on_connection_unblocked_callback(
+            self.on_rabbitmq_unblocked)
+
+    def on_rabbitmq_open_error(self,
+                               _c: connection.Connection,
+                               exc: typing.Union[str, Exception]) -> None:
+        """Connection to RabbitMQ failed, so shut things down."""
+        LOGGER.critical('Could not connect to RabbitMQ: %r', exc)
+        self.stats.incr('amqp.connection_failed')
+        self.on_ready_to_stop()
+
+    def on_rabbitmq_blocked(self,
+                            _c: connection.Connection,
+                            _f: frame.Method) -> typing.NoReturn:
         """Invoked when the RabbitMQ connection has notified us that it is
         blocking publishing.
 
-        :type _frame: :class:`pika.spec.Connection.Blocked`
-
         """
         LOGGER.warning('RabbitMQ is blocking the connection')
-        self.statsd_incr('amqp.connection_blocked')
+        self.stats.incr('amqp.connection_blocked')
         self.set_state(self.STATE_BLOCKED)
 
-    def on_connection_unblocked(self, _frame):
-        """Invoked when the RabbitMQ connection has notified us that it
+    def on_rabbitmq_unblocked(self,
+                              _c: connection.Connection,
+                              _f: frame.Method) -> typing.NoReturn:
+        """Invoked when the RabbitMQ connection has notified us that
         publishing is no longer unblocked.
-
-        :type _frame: :class:`pika.spec.Connection.Unblocked`
 
         """
         LOGGER.info('RabbitMQ is no longer blocking the connection')
-        self.statsd_incr('amqp.connection_unblocked')
-        # If we were blocked while processing, resume
+        self.stats.incr('amqp.connection_unblocked')
         if self.event_list:
             LOGGER.debug('Resuming the processing of %i events',
                          len(self.event_list))
             self.set_state(self.STATE_PROCESSING)
-            self.ioloop.add_callback(self.process_event)
+            self.async_call_soon(self.process_event)
         else:
             self.set_state(self.STATE_IDLE)
-            self.ioloop.add_callback(self.process_batch)
+            self.async_call_soon(self.process_batch)
 
-    def on_closed(self, _unused, code, text):
+    def on_rabbitmq_closed(self,
+                           _conn: asyncio_connection.AsyncioConnection,
+                           error: Exception) -> typing.NoReturn:
         """This method is invoked by pika when the connection to RabbitMQ is
         closed unexpectedly. Shutdown if not already doing so.
 
-        :param pika.connection.Connection _unused: The closed connection
-        :param int code: The AMQP reply code
-        :param str text: The AMQP reply text
-
         """
-        LOGGER.critical('Connection from RabbitMQ closed in state %s (%s, %s)',
-                        self.state_description, code, text)
-        self.channel = None
-        self.statsd_incr('amqp.connection_closed')
+        LOGGER.critical('Connection from RabbitMQ closed in state %s (%)',
+                        self.state_description, error)
+        self.set_state(self.STATE_CLOSED)
+        self.rabbitmq_channel = None
+        self.stats.incr('amqp.connection_closed')
         if self.is_shutting_down or self.is_waiting_to_shutdown:
             self.on_ready_to_stop()
         else:
             LOGGER.info('Reconnecting to RabbitMQ')
-            self.ioloop.add_callback(self.connect_to_rabbitmq)
+            self.ioloop.call_soon(self.connect_to_rabbitmq)
 
-    def open_channel(self):
+    def open_rabbitmq_channel(self):
         """Open a channel on the existing open connection to RabbitMQ"""
         LOGGER.debug('Opening a new channel')
-        self.connection.channel(self.on_channel_open)
+        self.rabbitmq.channel(on_open_callback=self.on_rabbitmq_channel_open)
 
-    def on_channel_open(self, channel):
+    def on_rabbitmq_channel_open(self, channel: pika.channel.Channel) \
+            -> typing.NoReturn:
         """This method is invoked by pika when the channel has been opened. It
-        will change the state to IDLE, add the callbacks and setup the channel
+        will change the state to IDLE, add the callbacks and set up the channel
         to start consuming.
-
-        :param pika.channel.Channel channel: The channel object
 
         """
         LOGGER.debug('Channel %i opened', channel.channel_number)
-        self.statsd_incr('amqp.channel_opened')
-        self.channel = channel
-        self.channel.add_on_close_callback(self.on_channel_closed)
+        self.stats.incr('amqp.channel_opened')
+        self.rabbitmq_channel = channel
+        self.rabbitmq_channel.add_on_close_callback(
+            self.on_rabbitmq_channel_closed)
         if self.confirm:
             LOGGER.info('Enabling publisher confirmations')
-            self.channel.add_on_return_callback(self.on_publish_return)
-            self.channel.confirm_delivery(self.on_publish_confirm)
+            self.rabbitmq_channel.add_on_return_callback(
+                self.on_rabbitmq_publish_return)
+            self.rabbitmq_channel.confirm_delivery(
+                self.on_rabbitmq_publish_confirm)
 
         # Schedule the processing of the first batch if it's not reopening
         if not self.is_reconnecting:
             self.set_state(self.STATE_IDLE)
-            self.ioloop.add_callback(self.process_batch)
+            self.async_call_soon(self.process_batch)
 
-    def on_channel_closed(self, channel, reply_code, reply_text):
+    def on_rabbitmq_channel_closed(self,
+                                   channel: pika.channel.Channel,
+                                   error: Exception) -> typing.NoReturn:
         """Invoked by pika when RabbitMQ unexpectedly closes the channel.
         Channels are usually closed if you attempt to do something that
         violates the protocol, such as re-declare an exchange or queue with
         different parameters. In this case, we'll close the connection
-        to shutdown the object.
-
-        :param pika.channel.Channel channel: The AMQP Channel
-        :param int reply_code: The AMQP reply code
-        :param str reply_text: The AMQP reply text
+        to shut down the object.
 
         """
-        LOGGER.warning('Channel %i closed: (%s) %s',
-                       channel.channel_number, reply_code, reply_text)
-        self.statsd_incr('amqp.channel_closed')
-        if concurrent.is_future(self.event_processed):
+        LOGGER.warning('Channel %i closed: %s',
+                       channel.channel_number, error)
+        self.stats.incr('amqp.channel_closed')
+        self.rabbitmq_channel = None
+        if self.event_processed:
             self.set_state(self.STATE_RECONNECTING)
+            self.open_rabbitmq_channel()
+        else:
+            self.on_ready_to_stop()
 
-            def on_open(new_channel):
-                self.on_channel_open(new_channel)
-                self.set_state(self.STATE_PROCESSING)
-                exc = EventError(self.current_event, reply_text)
-                self.event_processed.set_exception(exc)
+    def on_rabbitmq_publish_confirm(self,
+                                    _f: pika.frame.Method) -> typing.NoReturn:
+        """Invoked by pika when a delivery confirmation is received."""
+        if self.event_processed and self.current_event:
+            LOGGER.debug('Event %s confirmed', self.current_event['ev_id'])
+            self.stats.incr('amqp.publisher_confirm')
+            self.event_processed.set_result(True)
 
-            return self.connection.channel(on_open)
+    def on_rabbitmq_publish_return(self,
+                                   _c: pika.channel.Channel,
+                                   method: spec.Basic.Return,
+                                   _p: spec.BasicProperties,
+                                   _b: bytes) -> typing.NoReturn:
+        """Invoked by pika when a delivery failure is received. Setting the
+        current confirmation future exception to a
+        :class:`mikkoo.worker.EventError`.
 
-        del self.channel
-        self.on_ready_to_stop()
+        """
+        LOGGER.debug('Event %s was returned as (%s) %s from RabbitMQ',
+                     self.current_event['ev_id'], method.reply_code,
+                     method.reply_text)
+        self.stats.incr('amqp.message_returned')
+        self.event_processed.set_exception(
+            EventError(self.current_event, method.reply_text))
 
-    def process_batch(self):
+    async def process_batch(self):
         """Query PgQ for a batch and process it, scheduling the next execution
         of itself with the IOLoop.
 
@@ -316,54 +340,48 @@ class Process(multiprocessing.Process, state.State):
 
         self.set_state(self.STATE_PROCESSING)
         try:
-            batch = self.callproc('pgq.next_batch', self.worker_name,
-                                  self.consumer_name).as_dict()
+            batch = await self.callproc(
+                'pgq.next_batch', self.worker_name, self.consumer_name)
         except PgQError:
             batch = {}
 
-        if batch.get('next_batch') is None:
-            self.statsd_incr('empty_queue')
+        if batch and batch[0].get('next_batch') is None:
+            self.stats.incr('empty_queue')
             LOGGER.debug('Sleeping for %.2f seconds', self.wait_duration)
             self.set_state(self.STATE_IDLE)
-            self.statsd_add_timing('sleep', self.wait_duration)
-            self.ioloop.add_timeout(self.ioloop.time() + self.wait_duration,
-                                    self.process_batch)
+            self.stats.add_timing('sleep', self.wait_duration)
+            self.ioloop.call_later(
+                self.wait_duration,
+                lambda: asyncio.ensure_future(self.process_batch()))
             return
 
-        self.current_batch = batch['next_batch']
+        self.current_batch = batch[0]['next_batch']
+        LOGGER.debug('Grabbing events for %s', self.current_batch)
 
-        # Grab all of the events in the batch and convert the result to a list
         try:
-            result = self.callproc('pgq.get_batch_events', self.current_batch)
+            self.event_list = await self.callproc(
+                'pgq.get_batch_events', self.current_batch)
         except PgQError as error:
             LOGGER.error('Error getting batch: %s', error)
             self.set_state(self.STATE_IDLE)
-            return self.ioloop.add_callback(self.process_batch)
-
-        LOGGER.debug('Processing %i events', result.count())
-        self.event_list = [dict(row) for row in result]
-
-        # Start the processing of the event list
-        self.ioloop.add_callback(self.process_event)
+            return self.async_call_soon(self.process_batch)
+        LOGGER.debug('Received %i rows to process', len(self.event_list))
+        self.async_call_soon(self.process_event)
 
     @property
-    def is_processing(self):
-        """Returns a bool specifying if the consumer is currently processing
-
-        :rtype: bool
-
-        """
+    def is_processing(self) -> bool:
+        """Returns a bool specifying if the consumer is currently processing"""
         return self.state in [self.STATE_PROCESSING, self.STATE_STOP_REQUESTED]
 
-    def on_batch_complete(self):
+    async def on_batch_complete(self):
         LOGGER.debug('Batch %s complete', self.current_batch)
-        self.callproc('pgq.finish_batch', self.current_batch)
+        await self.callproc('pgq.finish_batch', self.current_batch)
         self.stats.incr(self.BATCHES)
         self.current_batch = None
         if self.is_waiting_to_shutdown:
             return self.on_ready_to_stop()
         self.set_state(self.STATE_IDLE)
-        self.ioloop.add_callback(self.process_batch)
+        self.async_call_soon(self.process_batch)
 
     def process_event(self):
         if not self.event_list:
@@ -373,31 +391,26 @@ class Process(multiprocessing.Process, state.State):
                          len(self.event_list), self.state_description)
             return
 
-        self.event_processed = concurrent.TracebackFuture()
+        self.event_processed = asyncio.Future()
         self.event_processed.add_done_callback(self.on_event_processed)
         self.current_event = event = self.event_list.pop(0)
 
-        self.statsd_incr('publish.{0}.{1}'.format(event['ev_extra1'],
-                                                  event['ev_type']))
+        self.stats.incr(f'publish.{event["ev_extra1"]}.{event["ev_type"]}')
         try:
-            self.channel.basic_publish(event['ev_extra1'],
-                                       event['ev_type'],
-                                       event['ev_data'],
-                                       self.build_properties_kwargs(event),
-                                       mandatory=True)
+            self.rabbitmq_channel.basic_publish(
+                event['ev_extra1'], event['ev_type'], event['ev_data'],
+                self.build_properties_kwargs(event), mandatory=True)
         except TypeError as error:
             self.send_exception_to_sentry()
-            message = 'Error building kwargs for the event: {0}'.format(error)
-            self.event_processed.set_exception(EventError(event, message))
+            self.event_processed.set_exception(
+                EventError(
+                    event, f'Error building kwargs for the event: {error}'))
         if not self.confirm:
             self.event_processed.set_result(True)
 
-    def build_properties_kwargs(self, event):
+    def build_properties_kwargs(self, event: dict) -> spec.BasicProperties:
         """Build the :class:`~pika.BasicProperties` object to use when
         publishing the AMQP message
-
-        :param dict event: The event to build kwargs for
-        :rtype: :class:`~pika.BasicProperties`
 
         """
         kwargs = {
@@ -412,7 +425,7 @@ class Process(multiprocessing.Process, state.State):
             try:
                 properties = json.loads(event['ev_extra3'])
             except ValueError:
-                LOGGER.warning('Failed to decode properties from ev_extra3: %r',
+                LOGGER.warning('Failed to decode ev_extra3: %r',
                                event['ev_extra3'])
                 properties = {}
             for key in properties:
@@ -422,55 +435,16 @@ class Process(multiprocessing.Process, state.State):
             kwargs['headers'] = {}
 
         kwargs['headers'].setdefault('origin', socket.getfqdn())
-        kwargs['headers'].setdefault('sequence', simpleflake.simpleflake())
+        kwargs['headers'].setdefault('sequence', str(uuid7()))
         kwargs['headers'].setdefault('txid', event['ev_txid'])
         kwargs['headers'].setdefault(
             'timestamp', arrow.get(event['ev_time']).to('utc').isoformat())
         return pika.BasicProperties(**kwargs)
 
     @staticmethod
-    def get_timestamp(value):
-        """Return the timestamp in UTC
-
-        :param datetime.datetime value: The event time
-        :rtype: int
-
-        """
-        return arrow.get(value).to('utc').timestamp
-
-    def on_publish_confirm(self, _frame):
-        """Invoked by pika when a delivery confirmation is received.
-
-        :param _frame: The confirmation frame
-        :type _frame: :class:`pika.spec.Basic.Ack`
-
-        """
-        # Acks occur event on a basic_return.
-        if self.event_processed and self.current_event:
-            LOGGER.debug('Event %s confirmed', self.current_event['ev_id'])
-            self.statsd_incr('amqp.publisher_confirm')
-            self.event_processed.set_result(True)
-
-    def on_publish_return(self, _channel, method, _properties, _body):
-        """Invoked by pika when a delivery failure is received. Setting the
-        current confirmation future exception to a
-        :class:`mikkoo.worker.EventError`.
-
-        :param _channel: The channel the message was returned on
-        :type _channel: :class:`~pika.channel.Channel`
-        :param method: The ``Basic.Return`` method frame
-        :type method: :class:`~pika.spec.Basic.Return`
-        :param _properties: The message properties of the returned message
-        :type _properties: :class:`~pika.spec.Basic.Properties`
-        :param bytes _body: The message body that was returned
-
-        """
-        LOGGER.debug('Event %s was returned as (%s) %s from RabbitMQ',
-                     self.current_event['ev_id'], method.reply_code,
-                     method.reply_text)
-        self.statsd_incr('amqp.message_returned')
-        self.event_processed.set_exception(EventError(self.current_event,
-                                                      method.reply_text))
+    def get_timestamp(value: datetime.datetime) -> int:
+        """Return the timestamp in UTC"""
+        return int(arrow.get(value).to('utc').timestamp())
 
     def on_event_processed(self, future):
         """Invoked once the message is published or an exception is raised
@@ -489,12 +463,18 @@ class Process(multiprocessing.Process, state.State):
                                exc.event['ev_id'],
                                exc.event)
             else:
-                self.callproc('pgq.event_retry', self.current_batch,
-                              exc.event['ev_id'], self.retry_interval)
+                self.async_call_soon(
+                    self.on_event_error,  self.current_batch,
+                    exc.event['ev_id'])
         else:
             self.stats.incr(self.PROCESSED)
         self.current_event = None
-        self.ioloop.add_callback(self.process_event)
+        self.async_call_soon(self.process_event)
+
+    async def on_event_error(self, batch, ev_id):
+        LOGGER.debug('on_event_error %s %s', batch, ev_id)
+        await self.callproc(
+            'pgq.event_retry', batch, ev_id, self.retry_interval)
 
     def run(self):
         """Entry-point that is automatically invoked as part of the
@@ -505,69 +485,70 @@ class Process(multiprocessing.Process, state.State):
         :meth:`~mikkoo.worker.Process.on_channel_open`.
 
         """
-        self.setup()
+        self.set_state(self.STATE_INITIALIZING)
+        self.ioloop = asyncio.get_event_loop()
+        self.ioloop.run_until_complete(self.setup())
         if not self.is_stopped:
             LOGGER.info('%s worker started', self.name)
             try:
-                self.ioloop.start()
+                self.ioloop.run_forever()
             except KeyboardInterrupt:
                 LOGGER.warning('CTRL-C while waiting for clean shutdown')
-            except Exception:
-                self.send_exception_to_sentry()
+            finally:
+                self.ioloop.run_until_complete(
+                    self.ioloop.shutdown_asyncgens())
+                self.ioloop.close()
 
-    def setup(self):
-        """Ensure that all the things that are required are setup when the
+    async def setup(self) -> typing.NoReturn:
+        """Ensure that all the things that are required are set up when the
         Process is started.
 
         """
+        helper.config.LoggingConfig(self.config['logging']).configure()
 
-        if not self.connect_to_postgres():
+        if not await self.connect_to_postgres():
             LOGGER.info('Could not connect to Postgres, stopping')
             self.set_state(self.STATE_STOPPED)
             return
+
+        await self.stats.start()
 
         self.stats[self.ERROR] = 0
         self.stats[self.PROCESSED] = 0
         self.stats[self.PENDING] = 0
 
-        self.create_queue()
-        self.register_consumer()
+        await self.create_queue()
+        await self.register_consumer()
 
         self.setup_signal_handlers()
-        self.ioloop = ioloop.IOLoop.current()
+        self.connect_to_rabbitmq()
 
-        self.ioloop.add_callback(self.connect_to_rabbitmq)
-
-    def create_queue(self):
-        """Create the PgQ for the worker.
-
-        :rtype: :class:`~queries.Result`
-
-        """
+    async def create_queue(self) -> typing.NoReturn:
+        """Create the PgQ for the worker."""
         LOGGER.debug('Fetching PgQ information')
-        result = self.callproc('pgq.create_queue', self.worker_name)
+        result = await self.callproc('pgq.create_queue', self.worker_name)
         if not result:
             LOGGER.debug('Queue already exists')
 
-    def register_consumer(self):
+    async def register_consumer(self) -> typing.NoReturn:
         """Register the consumer. If registration fails, shutdown the worker.
 
         """
-        results = self.callproc('pgq.register_consumer',
-                                self.worker_name, self.consumer_name)
-        if results is None:
+        results = await self.callproc(
+            'pgq.register_consumer', self.worker_name, self.consumer_name)
+        if not results:
             LOGGER.critical('Registration of the consumer failed')
-            self.stop()
+            self.async_call_soon(self.stop)
 
-        elif not results.as_dict()['register_consumer']:
+        elif not results[0]['register_consumer']:
             LOGGER.debug('Consumer is already registered')
 
-    def unregister_consumer(self):
+    async def unregister_consumer(self) -> typing.NoReturn:
         """Unregister the consumer with PgQ"""
-        self.callproc('pgq.unregister_consumer',
-                      self.worker_name, self.consumer_name)
+        await self.callproc(
+            'pgq.unregister_consumer', self.worker_name, self.consumer_name)
 
-    def on_ready_to_stop(self):
+    def on_ready_to_stop(self) -> typing.NoReturn:
         """Invoked when the worker is shutting down and is no longer processing
         a PgQ batch.
 
@@ -576,19 +557,17 @@ class Process(multiprocessing.Process, state.State):
         self.set_state(self.STATE_SHUTTING_DOWN)
 
         # Reset any signal handlers
-        signal.signal(signal.SIGABRT, signal.SIG_IGN)
-        signal.signal(signal.SIGINT, signal.SIG_IGN)
-        signal.signal(signal.SIGPROF, signal.SIG_IGN)
-        signal.signal(signal.SIGTERM, signal.SIG_IGN)
+        self.ioloop.remove_signal_handler(signal.SIGABRT)
+        self.ioloop.remove_signal_handler(signal.SIGPROF)
 
         # Unregister the consumer from PgQ
         if self.worker_config.get('unregister', True):
             self.unregister_consumer()
 
         # If the connection is still around, close it
-        if self.connection and self.connection.is_open:
+        if self.rabbitmq and self.rabbitmq.is_open:
             LOGGER.debug('Closing connection to RabbitMQ')
-            self.connection.close()
+            self.rabbitmq.close()
 
         # Stop the IOLoop
         if self.ioloop:
@@ -600,45 +579,43 @@ class Process(multiprocessing.Process, state.State):
         LOGGER.debug('Shutdown complete')
 
     def setup_signal_handlers(self):
-        """Setup the stats and stop signal handlers."""
+        """Set up the stats and stop signal handlers."""
         signal.signal(signal.SIGINT, signal.SIG_IGN)
         signal.signal(signal.SIGTERM, signal.SIG_IGN)
-        signal.signal(signal.SIGPROF, self.on_sigprof)
-        signal.signal(signal.SIGABRT, self.stop)
-        signal.siginterrupt(signal.SIGPROF, False)
-        signal.siginterrupt(signal.SIGABRT, False)
+
+        self.ioloop.add_signal_handler(signal.SIGABRT, self.on_sigabrt)
+        self.ioloop.add_signal_handler(signal.SIGPROF, self.on_sigprof)
         LOGGER.debug('Signal handlers setup')
 
-    def on_sigprof(self, _unused_signum, _unused_frame):
+    def async_call_soon(self, func: typing.Callable, *args) -> typing.NoReturn:
+        self.ioloop.call_soon(asyncio.ensure_future(func(*args)))
+
+    def on_sigabrt(self) -> typing.NoReturn:
+        """Invoked when the MCP sends a SIGABRT to shut down the worker"""
+        LOGGER.debug('on_sigabrt when %s', self.state_description)
+        self.async_call_soon(self.stop)
+
+    def on_sigprof(self) -> typing.NoReturn:
         """Called when SIGPROF is sent to the process, will dump the stats, in
         future versions, queue them for the master process to get data.
-
-        :param int _unused_signum: The signal number
-        :param frame _unused_frame: The python frame the signal was received at
 
         """
         LOGGER.debug('on_sigprof')
         signal.siginterrupt(signal.SIGPROF, False)
-        self.ioloop.add_callback_from_signal(self.submit_stats_report)
+        self.async_call_soon(self.submit_stats_report)
 
-    def on_statsd_failure(self):
-        self.set_state(self.STATE_STOP_REQUESTED)
-
-    def submit_stats_report(self):
+    async def submit_stats_report(self):
         """Invoked by the IOLoop"""
         LOGGER.debug('Submitting stats report')
-        result = self.callproc('pgq.get_consumer_info', self.worker_name,
-                               self.consumer_name)
-        LOGGER.debug('Post consumer info: %r', result)
+        result = await self.callproc(
+            'pgq.get_consumer_info', self.worker_name, self.consumer_name)
         self.stats.set_gauge(self.PENDING, result[0].get('pending_events', 0))
-        self._kwargs['stats_queue'].put(self.stats.report(), True)
+        self.stats_queue.put(self.stats.report(), True)
         self.last_stats_time = time.time()
 
-    def stop(self, signum=None, _unused=None):
+    async def stop(self) -> typing.NoReturn:
         """Stop the consumer from consuming by calling BasicCancel and setting
         our state.
-        :param int signum: The signal received
-        :param frame _unused: The stack frame from when the signal was called
         """
         LOGGER.debug('Stop called in state: %s', self.state_description)
         if self.is_stopped:
@@ -651,64 +628,29 @@ class Process(multiprocessing.Process, state.State):
             LOGGER.warning('Stop requested but already waiting to shut down')
             return
 
-        # Wait until the consumer has finished processing to shutdown
+        # Wait until the consumer has finished processing to shut down
         if self.is_processing:
             LOGGER.info('Waiting for batch to finish processing')
             self.set_state(self.STATE_STOP_REQUESTED)
-            if signum == signal.SIGTERM:
-                signal.siginterrupt(signal.SIGTERM, False)
             return
 
-        # Stop and flush the statds data
-        if self.stats.statsd:
-            self.stats.statsd.stop()
+        # Stop and flush the stats data
+        await self.stats.stop()
 
         self.on_ready_to_stop()
 
-    def send_exception_to_sentry(self):
-        """Send an exception to Sentry if enabled.
-        :param tuple exc_info: exception information as returned from
-            :func:`sys.exc_info`
-        """
-        if self.sentry_client:
-            self.sentry_client.captureException(sys.exc_info())
+    @staticmethod
+    def send_exception_to_sentry() -> typing.NoReturn:
+        """Send an exception to Sentry if enabled."""
+        if sentry_sdk:
+            sentry_sdk.capture_exception(sys.exc_info())
 
-    def set_sentry_context(self, tag, value):
-        """Set a context tag in Sentry for the given key and value.
-        :param str tag: The context tag name
-        :param str value: The context value
-        """
-        if self.sentry_client:
+    @staticmethod
+    def set_sentry_context(tag: str, value: str) -> typing.NoReturn:
+        """Set a context tag in Sentry for the given key and value."""
+        if sentry_sdk:
             LOGGER.debug('Setting sentry context for %s to %s', tag, value)
-            self.sentry_client.tags_context({tag: value})
-
-    def statsd_add_timing(self, key, duration):
-        """Add a timing to statsd
-        :param str key: The key to add the timing to
-        :param int|float duration: The timing value
-        """
-        if self.stats.statsd:
-            self.stats.statsd.add_timing(key, duration)
-
-    def statsd_incr(self, key, value=1):
-        """Increment the specified key in statsd if statsd is enabled.
-        :param str key: The key to increment
-        :param int value: The value to increment the key by
-        """
-        if self.stats.statsd:
-            self.stats.statsd.incr(key, value)
-
-    @contextlib.contextmanager
-    def statsd_track_duration(self, key):
-        """Time around a context and emit a statsd metric.
-        :param str key: The key for the timing to track
-        """
-        start_time = time.time()
-        try:
-            yield
-        finally:
-            finish_time = max(start_time, time.time())
-            self.statsd_add_timing(key, finish_time - start_time)
+            sentry_sdk.set_tag(tag, value)
 
 
 class MikkooError(Exception):

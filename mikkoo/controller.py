@@ -1,14 +1,13 @@
 """
-Mikkoo
-======
 PgQ -> RabbitMQ Relay
 
 """
 import logging
 import signal
+import typing
 
 import helper
-from helper import parser
+from helper import controller, parser
 
 from mikkoo import mcp
 
@@ -16,24 +15,20 @@ DESCRIPTION = 'Mikkoo is a PgQ to RabbitMQ Relay'
 LOGGER = logging.getLogger(__name__)
 
 
-class Controller(helper.Controller):
+class Controller(controller.Controller):
     """The Mikkoo controller application that invokes the MCP and handles all
-    of the OS level concerns.
+    OS level concerns.
 
     """
     def __init__(self, *args, **kwargs):
         super(Controller, self).__init__(*args, **kwargs)
         self._mcp = None
 
-    def _master_control_program(self):
-        """Return an instance of the MasterControlProgram.
-
-        :rtype: rejected.mcp.MasterControlProgram
-
-        """
+    def _master_control_program(self) -> mcp.MasterControlProgram:
+        """Return an instance of the MasterControlProgram"""
         return mcp.MasterControlProgram(self.config)
 
-    def stop(self):
+    def stop(self) -> typing.NoReturn:
         """Shutdown the MCP and child processes cleanly"""
         LOGGER.info('Shutting down controller')
         self.set_state(self.STATE_STOP_REQUESTED)
@@ -58,8 +53,8 @@ class Controller(helper.Controller):
         self._stopped()
         LOGGER.info('Shutdown complete')
 
-    def run(self):
-        """Run the rejected Application"""
+    def run(self) -> typing.NoReturn:
+        """Run the Mikkoo Application"""
         self.setup()
         self._mcp = self._master_control_program()
         try:
@@ -70,7 +65,7 @@ class Controller(helper.Controller):
             self.stop()
 
 
-def main():
+def main() -> typing.NoReturn:
     """Called when invoking the command line script."""
     parser.description(DESCRIPTION)
     helper.start(Controller)

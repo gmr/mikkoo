@@ -1,17 +1,18 @@
 """Tests for the MCP"""
-import mock
+from unittest import mock
 
 from helper import config
 
 from mikkoo import mcp
-from . import test_state
+from tests import test_state
 
 
 class TestMCP(test_state.TestState):
 
     CONFIG = {'wake_interval': 30.0, 'workers': {}}
 
-    def setUp(self):
+    async def asyncSetUp(self):
+        await super().asyncSetUp()
         with mock.patch('multiprocessing.Queue') as stats_queue:
             self._stats_queue = stats_queue
             self.cfg = config.Config()

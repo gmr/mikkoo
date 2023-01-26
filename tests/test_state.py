@@ -1,17 +1,16 @@
 """Tests for the State Class"""
-import mock
-try:
-    import unittest2 as unittest
-except ImportError:
-    import unittest
+import asyncio
+import unittest
+from unittest import mock
 
 from mikkoo import state
 
 
-class TestState(unittest.TestCase):
+class TestState(unittest.IsolatedAsyncioTestCase):
 
-    def setUp(self):
+    async def asyncSetUp(self):
         self._obj = state.State()
+        self._obj.ioloop = asyncio.get_running_loop()
 
     def test_set_state_invalid_value(self):
         self.assertRaises(ValueError, self._obj.set_state, 9999)
