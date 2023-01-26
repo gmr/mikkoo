@@ -1,0 +1,35 @@
+name: Testing
+on:
+  push:
+    branches: ["*"]
+    paths-ignore:
+      - 'docs/**'
+      - 'setup.*'
+      - '*.md'
+      - '*.rst'
+    tags-ignore: ["*"]
+  pull_request: {}
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    strategy:
+      matrix:
+        python: [3.9, "3.10", 3.11]
+    container:
+      image: python:${{ matrix.python }}-alpine
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v1
+
+      - name: Install OS dependencies
+        run: apk --update add gcc libffi-dev linux-headers make musl-dev
+
+      - name: Install testing dependencies
+        run: pip3 --no-cache-dir install -e '.[testing]'
+
+      - name: Setup test environment
+        run: ci/test-before-script.sh
+
+      - name: Run tests
+        run: ci/test-script.sh
