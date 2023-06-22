@@ -208,8 +208,13 @@ instance using default credentials.
       workers:
          invoices:
            postgres_url: postgresql://localhost:5432/postgres
-           rabbitmq_url: amqp://localhost:5672/%2f
-           confirm: False
+           rabbitmq:
+             host: localhost
+             port: 5671
+             vhost: /
+             ssl_options:
+               protocol: 2
+           confirm: false
 
 Queue Configuration Options
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^
@@ -226,15 +231,58 @@ The following table details the configuration options available per queue:
 +--------------------+---------------------------------------------------------------------+
 | ``postgresql_url`` | The url for connecting to PostgreSQL                                |
 +--------------------+---------------------------------------------------------------------+
-| ``rabbitmq_url``   | The AMQP url for connecting to RabbitMQ                             |
+| ``rabbitmq``       | Data structure for connection parameters to connect to RabbitMQ     |
 +--------------------+---------------------------------------------------------------------+
 | ``retry_delay``    | How long in seconds until PgQ emits failed events. Default: ``10``  |
 +--------------------+---------------------------------------------------------------------+
 | ``unregister``     | Unregister a consumer with PgQ on shutdown. Default: ``True``       |
 +--------------------+---------------------------------------------------------------------+
 | ``wait_duration``  | How long to wait before checking the queue after the last empty     |
-|                    | result. Default: ``1``                                              |
+|                    | result. Default: ``10``                                             |
 +--------------------+---------------------------------------------------------------------+
+
+``rabbitmq`` attributes:
+
++----------------------+---------------------------------------------------------------+
+| Attribute            | Description                                                   |
++======================+===============================================================+
+| `host`               | The hostname or ip address of the RabbitMQ server (str)       |
++----------------------+---------------------------------------------------------------+
+| `port`               | The port of the RabbitMQ server (int)                         |
++----------------------+---------------------------------------------------------------+
+| `vhost`              | The virtual host to connect to (str)                          |
++----------------------+---------------------------------------------------------------+
+| `username`           | The username to connect as (str)                              |
++----------------------+---------------------------------------------------------------+
+| `password`           | The password to use (str)                                     |
++----------------------+---------------------------------------------------------------+
+| `ssl_options`        | Optional: the SSL options for the `SSL connection socket`     |
++----------------------+---------------------------------------------------------------+
+| `heartbeat_interval` | Optional: the AMQP heartbeat interval (int) default: 300 sec  |
++----------------------+---------------------------------------------------------------+
+
+``ssl_options`` attributes:
+
++----------------+------------------------------------------------------------------------------------------+
+| Attribute      | Description                                                                              |
++================+==============+===========================================================================+
+| `ca_certs`     | The file path to the concatenated list of CA certificates (str)                          |
++----------------+------------------------------------------------------------------------------------------+
+| `ca_path`      | The directory path to the PEM formatted CA certificates (str)                            |
++----------------+------------------------------------------------------------------------------------------+
+| `ca_data`      | The PEM encoded CA certificates (str)                                                    |
++----------------+------------------------------------------------------------------------------------------+
+| `prototcol`    | The ssl `PROTOCOL_*`_ enum integer value. Default: ``2`` for enum ``PROTOCOL_TLS`` (int) |
++----------------+------------------------------------------------------------------------------------------+
+| `certfile`     | The file path to the PEM formatted certificate file (str)                                |
++----------------+------------------------------------------------------------------------------------------+
+| `keyfile`      | The file path to the certificate private key (str)                                       |
++----------------+------------------------------------------------------------------------------------------+
+| `password`     | The password for decrypting the ``keyfile`` private key (str)                            |
++----------------+------------------------------------------------------------------------------------------+
+| `ciphers`      | The set of available ciphers in the OpenSSL cipher list format (str)                     |
++----------------+------------------------------------------------------------------------------------------+
+
 
 Example Configuration
 ^^^^^^^^^^^^^^^^^^^^^

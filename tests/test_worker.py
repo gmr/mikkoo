@@ -20,7 +20,11 @@ class TestProcess(test_state.TestState):
                 },
                 'worker': {
                     'postgres_url': 'postgresql://localhost:5432/postgres',
-                    'rabbitmq_url': 'rabbitmq://localhost:5672/%2f',
+                    'rabbitmq': {
+                        'host': 'localhost',
+                        'port': 5672,
+                        'vhost': '/'
+                    },
                     'processes': 1,
                     'confirm': False
                 }

@@ -13,6 +13,7 @@ import logging
 import multiprocessing
 import os
 import signal
+import ssl
 import socket
 import sys
 import time
@@ -45,7 +46,7 @@ class Process(multiprocessing.Process, state.State):
     DEFAULT_CONSUMER_NAME = 'mikkoo'
     DEFAULT_MAX_FAILURES = 10
     DEFAULT_RETRY_INTERVAL = 10
-    DEFAULT_WAIT_DURATION = 1
+    DEFAULT_WAIT_DURATION = 10
     BATCHES = 'batches'
     ERROR = 'failed'
     PROCESSED = 'processed'
@@ -88,6 +89,7 @@ class Process(multiprocessing.Process, state.State):
         self.maximum_failures = kwargs['config']['worker'].get(
             'max_failures', self.DEFAULT_MAX_FAILURES)
         self.postgres: typing.Optional[psycopg.AsyncConnection] = None
+        self.postgres_cursor: typing.Optional[psycopg.ClientCursor] = None
         self.rabbitmq: typing.Optional[
             asyncio_connection.AsyncioConnection] = None
         self.rabbitmq_channel: typing.Optional[pika.channel.Channel] = None
@@ -125,11 +127,14 @@ class Process(multiprocessing.Process, state.State):
         try:
             self.postgres = await psycopg.AsyncConnection.connect(
                 self.worker_config.get('postgres_url'),
+                cursor_factory=psycopg.AsyncClientCursor,
+                row_factory=rows.dict_row,
                 autocommit=True)
         except psycopg.OperationalError as error:
             self.send_exception_to_sentry()
             LOGGER.error('Error connecting to Postgres: %s', error)
             return False
+        self.postgres_cursor = self.postgres.cursor()
         return True
 
     def build_sql(self, proc_name: str, *args) -> str:
@@ -145,19 +150,20 @@ class Process(multiprocessing.Process, state.State):
         """
         sentry_sdk.set_context('mikkoo', {'function': proc_name})
         with self.stats.track_duration(f'db.{proc_name}.query_time'):
-            async with self.postgres.cursor(
-                    row_factory=rows.dict_row) as cursor:
-                try:
-                    await cursor.execute(
-                        self.build_sql(proc_name, *args), args or [])
-                    return await cursor.fetchall()
-                except psycopg.InternalError as error:
-                    self.send_exception_to_sentry()
-                    self.log_db_error(proc_name, error)
-                    raise PgQError(str(error))
-                except psycopg.Error as error:
-                    self.send_exception_to_sentry()
-                    self.log_db_error(proc_name, error)
+            sql = self.build_sql(proc_name, *args)
+            LOGGER.debug('Query: %r, %r', sql, args or [])
+            try:
+                await self.postgres_cursor.execute(sql, args or [])
+                result = await self.postgres_cursor.fetchall()
+                LOGGER.debug('Fetchall Result: %r', result)
+                return result
+            except psycopg.InternalError as error:
+                self.send_exception_to_sentry()
+                self.log_db_error(proc_name, error)
+                raise PgQError(str(error))
+            except psycopg.Error as error:
+                self.send_exception_to_sentry()
+                self.log_db_error(proc_name, error)
 
     def log_db_error(self, name: str, error: Exception) -> typing.NoReturn:
         """Log database errors and increment the stats counter"""
@@ -169,10 +175,88 @@ class Process(multiprocessing.Process, state.State):
         """Connect to RabbitMQ returning the connection handle."""
         self.set_state(self.STATE_CONNECTING)
         return asyncio_connection.AsyncioConnection(
-            pika.URLParameters(self.worker_config.get('rabbitmq_url')),
+            self.connection_parameters,
             on_open_callback=self.on_rabbitmq_open,
             on_open_error_callback=self.on_rabbitmq_open_error,
             on_close_callback=self.on_rabbitmq_closed)
+
+    @property
+    def connection_parameters(self) -> pika.ConnectionParameters:
+        """Return connection parameters for a pika connection.
+
+        Valid options:
+
+          - host
+          - port
+          - vhost
+          - username
+          - password
+          - frame_size
+          - socket_timeout
+          - heartbeat
+          - ssl_options
+
+        """
+        return pika.ConnectionParameters(
+            self.worker_config['rabbitmq'].get('host', 'localhost'),
+            self.worker_config['rabbitmq'].get('port', 5672),
+            self.worker_config['rabbitmq'].get('vhost', '/'),
+            pika.PlainCredentials(
+                self.worker_config.get('username', 'guest'),
+                self.worker_config.get('password', 'guest')),
+            ssl_options=self.connection_parameters_ssl_options,
+            frame_max=self.worker_config['rabbitmq'].get(
+                'frame_max', spec.FRAME_MAX_SIZE),
+            socket_timeout=self.worker_config['rabbitmq'].get(
+                'socket_timeout', 10),
+            heartbeat=self.worker_config['rabbitmq'].get(
+                'heartbeat_interval', 300))
+
+    @property
+    def connection_parameters_ssl_options(self) \
+            -> typing.Optional[pika.SSLOptions]:
+        """Return the `pika.SSLOptions` parameter for the pika connection
+
+        The expected ssl_options values in the config are:
+
+            * ca_certs
+            * ca_path
+            * ca_data
+            * protocol
+            * certfile
+            * keyfile
+            * password
+            * ciphers
+
+        :rtype: `pika.SSLOptions`|None
+
+        """
+        ssl_options = self.worker_config['rabbitmq'].get('ssl_options')
+        if not ssl_options:
+            return
+
+        context = ssl.SSLContext(
+            protocol=int(ssl_options.get('protocol', ssl.PROTOCOL_TLS)))
+
+        # Load a set of certification authority (CA) certificates
+        if any([ssl_options.get('ca_certs'), ssl_options.get('ca_path'),
+                ssl_options.get('ca_data')]):
+            context.load_verify_locations(ssl_options.get('ca_certs'),
+                                          ssl_options.get('ca_path'),
+                                          ssl_options.get('ca_data'))
+
+        # Load a private key and the corresponding certificate
+        if ssl_options.get('certfile'):
+            certfile = ssl_options['certfile']
+            keyfile = ssl_options.get('keyfile')
+            password = ssl_options.get('password')
+            context.load_cert_chain(certfile, keyfile, password)
+
+        # Set the available ciphers for sockets created with this context
+        if ssl_options.get('ciphers'):
+            context.set_ciphers(ssl_options['ciphers'])
+
+        return pika.SSLOptions(context=context)
 
     def on_rabbitmq_open(self,
                          conn: asyncio_connection.AsyncioConnection) \
