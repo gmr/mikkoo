@@ -143,7 +143,8 @@ class Process(multiprocessing.Process, state.State):
             values=','.join('%s' for _a in range(0, len(args))))).as_string(
                 self.postgres)
 
-    async def callproc(self, proc_name: str, *args) -> typing.Sequence[dict]:
+    async def callproc(self, proc_name: str, *args) \
+            -> typing.Optional[typing.Sequence[dict]]:
         """Call the stored procedure in Postgres with the specified
         arguments.
 
@@ -157,6 +158,11 @@ class Process(multiprocessing.Process, state.State):
                 result = await self.postgres_cursor.fetchall()
                 LOGGER.debug('Fetchall Result: %r', result)
                 return result
+            except psycopg.OperationalError as error:
+                LOGGER.warning('Postgres OperationalError: %s', error)
+                self.send_exception_to_sentry()
+                self.log_db_error(proc_name, error)
+                await self.connect_to_postgres()
             except psycopg.InternalError as error:
                 self.send_exception_to_sentry()
                 self.log_db_error(proc_name, error)
@@ -421,15 +427,17 @@ class Process(multiprocessing.Process, state.State):
             return
 
         self.set_state(self.STATE_PROCESSING)
+        batch = None
         try:
             batch = await self.callproc(
                 'pgq.next_batch', self.worker_name, self.consumer_name)
         except PgQError:
-            batch = {}
+            pass
 
-        if batch and batch[0].get('next_batch') is None:
+        if not batch or (batch and batch[0].get('next_batch') is None):
             self.stats.incr('empty_queue')
-            LOGGER.debug('Sleeping for %.2f seconds', self.wait_duration)
+            LOGGER.debug('Empty queue, sleeping for %.2f seconds',
+                         self.wait_duration)
             self.set_state(self.STATE_IDLE)
             self.stats.add_timing('sleep', self.wait_duration)
             self.ioloop.call_later(
