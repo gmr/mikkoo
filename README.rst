@@ -309,7 +309,13 @@ The following is an example of a full configuration file:
           consumer_name: my_consumer
           max_failures: 5
           postgres_url: postgresql://localhost:5432/postgres
-          rabbitmq_url: amqp://localhost:5672/%2f
+          rabbitmq:
+            host: localhost
+            port: 5671
+            username: guest
+            password: guest
+            ssl_options:
+              protocol: 2
           retry_delay: 5
           unregister: False
           wait_duration: 5
