@@ -202,8 +202,8 @@ class Process(multiprocessing.Process, state.State):
             self.worker_config['rabbitmq'].get('port', 5672),
             self.worker_config['rabbitmq'].get('vhost', '/'),
             pika.PlainCredentials(
-                self.worker_config.get('username', 'guest'),
-                self.worker_config.get('password', 'guest')),
+                self.worker_config['rabbitmq'].get('username', 'guest'),
+                self.worker_config['rabbitmq'].get('password', 'guest')),
             ssl_options=self.connection_parameters_ssl_options,
             frame_max=self.worker_config['rabbitmq'].get(
                 'frame_max', spec.FRAME_MAX_SIZE),
