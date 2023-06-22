@@ -13,8 +13,8 @@ import logging
 import multiprocessing
 import os
 import signal
-import ssl
 import socket
+import ssl
 import sys
 import time
 import typing
@@ -227,8 +227,6 @@ class Process(multiprocessing.Process, state.State):
             * keyfile
             * password
             * ciphers
-
-        :rtype: `pika.SSLOptions`|None
 
         """
         ssl_options = self.worker_config['rabbitmq'].get('ssl_options')
