@@ -282,6 +282,7 @@ The following table details the configuration options available per queue:
 +----------------+------------------------------------------------------------------------------------------+
 | `ciphers`      | The set of available ciphers in the OpenSSL cipher list format (str)                     |
 +----------------+------------------------------------------------------------------------------------------+
+
 .. _SSL connection socket: https://docs.python.org/3/library/ssl.html#ssl.wrap_socket
 .. _PROTOCOL_*: https://docs.python.org/3/library/ssl.html#ssl.SSLContext
 
