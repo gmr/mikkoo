@@ -69,6 +69,11 @@ class MasterControlProgram(state.State):
         """Return a list of all active processes, pruning dead ones"""
         active_processes, dead_processes = [], []
         for name in self.workers.keys():
+            if not self.workers[name].process:
+                LOGGER.warning('Missing process for %s', name)
+                dead_processes.append(name)
+                continue
+
             if self.workers[name].process.pid == os.getpid():
                 continue
             try:
