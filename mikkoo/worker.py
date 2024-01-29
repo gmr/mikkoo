@@ -345,7 +345,12 @@ class Process(multiprocessing.Process, state.State):
     def open_rabbitmq_channel(self):
         """Open a channel on the existing open connection to RabbitMQ"""
         LOGGER.debug('Opening a new channel')
-        self.rabbitmq.channel(on_open_callback=self.on_rabbitmq_channel_open)
+        try:
+            self.rabbitmq.channel(
+                on_open_callback=self.on_rabbitmq_channel_open)
+        except exceptions.ConnectionWrongStateError as err:
+            LOGGER.critical('Channel Open on closed connection: %s', err)
+            self.on_ready_to_stop()
 
     def on_rabbitmq_channel_open(self, channel: pika.channel.Channel) \
             -> typing.NoReturn:
@@ -385,7 +390,7 @@ class Process(multiprocessing.Process, state.State):
                        channel.channel_number, error)
         self.stats.incr('amqp.channel_closed')
         self.rabbitmq_channel = None
-        if self.event_processed:
+        if self.rabbitmq.is_open and self.event_processed:
             self.set_state(self.STATE_RECONNECTING)
             self.open_rabbitmq_channel()
         else:
@@ -491,10 +496,10 @@ class Process(multiprocessing.Process, state.State):
                 event['ev_extra1'], event['ev_type'], event['ev_data'],
                 self.build_properties_kwargs(event), mandatory=True)
         except TypeError as error:
-            self.send_exception_to_sentry()
             self.event_processed.set_exception(
-                EventError(
-                    event, f'Error building kwargs for the event: {error}'))
+                EventError(event,
+                           f'Error building kwargs for the event: {error}'))
+            self.send_exception_to_sentry()
         if not self.confirm:
             self.event_processed.set_result(True)
 
