@@ -331,12 +331,13 @@ class MasterControlProgram(state.State):
 
     def remove_worker_process(self, name: str) -> typing.NoReturn:
         """Remove all details for the specified worker and process name."""
-        if not self.workers[name].process:
+        process = self.workers[name].process
+        if not process:
             LOGGER.warning('Missing process for %s', name)
             return
-        elif self.workers[name].process.is_alive():
+        if process.is_alive():
             try:
-                self.workers[name].process.terminate()
+                process.terminate()
             except OSError:
                 pass
         self.workers[name].process = None

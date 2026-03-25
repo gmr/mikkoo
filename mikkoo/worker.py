@@ -421,7 +421,24 @@ class Process(multiprocessing.Process, state.State):
         LOGGER.warning('Channel %i closed: %s', channel.channel_number, error)
         self.stats.incr('amqp.channel_closed')
         self.rabbitmq_channel = None
-        if self.rabbitmq.is_open and self.event_processed:
+        if isinstance(
+            error,
+            (
+                exceptions.StreamLostError,
+                exceptions.ConnectionClosedByBroker,
+            ),
+        ):
+            LOGGER.warning(
+                'Connection-level failure detected, initiating full reconnect'
+            )
+            self.ioloop.call_soon(self.connect_to_rabbitmq)
+            return
+        if (
+            self.rabbitmq
+            and self.rabbitmq.is_open
+            and not self.rabbitmq.is_closing
+            and self.event_processed
+        ):
             self.set_state(self.STATE_RECONNECTING)
             self.open_rabbitmq_channel()
         else:
