@@ -139,10 +139,14 @@ class Process(multiprocessing.Process, state.State):
 
     def build_sql(self, proc_name: str, *args) -> str:
         placeholders = sql.SQL(',').join(sql.Placeholder() for _ in args)
-        return sql.SQL('SELECT * FROM {}({})').format(
-            sql.Identifier(*proc_name.split('.')),
-            placeholders,
-        ).as_string(self.postgres)
+        return (
+            sql.SQL('SELECT * FROM {}({})')
+            .format(
+                sql.Identifier(*proc_name.split('.')),
+                placeholders,
+            )
+            .as_string(self.postgres)
+        )
 
     async def callproc(
         self, proc_name: str, *args
@@ -379,9 +383,7 @@ class Process(multiprocessing.Process, state.State):
             LOGGER.critical('Channel Open on closed connection: %s', err)
             self.on_ready_to_stop()
 
-    def on_rabbitmq_channel_open(
-        self, channel: pika.channel.Channel
-    ) -> None:
+    def on_rabbitmq_channel_open(self, channel: pika.channel.Channel) -> None:
         """This method is invoked by pika when the channel has been opened. It
         will change the state to IDLE, add the callbacks and set up the channel
         to start consuming.
@@ -443,9 +445,7 @@ class Process(multiprocessing.Process, state.State):
         else:
             self.on_ready_to_stop()
 
-    def on_rabbitmq_publish_confirm(
-        self, _f: pika.frame.Method
-    ) -> None:
+    def on_rabbitmq_publish_confirm(self, _f: pika.frame.Method) -> None:
         """Invoked by pika when a delivery confirmation is received."""
         if self.event_processed and self.current_event:
             LOGGER.debug('Event %s confirmed', self.current_event['ev_id'])
