@@ -138,11 +138,10 @@ class Process(multiprocessing.Process, state.State):
         return True
 
     def build_sql(self, proc_name: str, *args) -> str:
-        return sql.SQL(
-            'SELECT * FROM {proc_name}({values})'.format(
-                proc_name=proc_name,
-                values=','.join('%s' for _a in range(0, len(args))),
-            )
+        placeholders = sql.SQL(',').join(sql.Placeholder() for _ in args)
+        return sql.SQL('SELECT * FROM {}({})').format(
+            sql.Identifier(*proc_name.split('.')),
+            placeholders,
         ).as_string(self.postgres)
 
     async def callproc(
@@ -174,7 +173,7 @@ class Process(multiprocessing.Process, state.State):
                 self.send_exception_to_sentry()
                 self.log_db_error(proc_name, error)
 
-    def log_db_error(self, name: str, error: Exception) -> typing.NoReturn:
+    def log_db_error(self, name: str, error: Exception) -> None:
         """Log database errors and increment the stats counter"""
         LOGGER.error(
             'Error executing %s.callproc: (%s) %s',
@@ -182,7 +181,7 @@ class Process(multiprocessing.Process, state.State):
             error.__class__.__name__,
             error,
         )
-        self.stats.incr(f'db.{name}.error.{error!s}')
+        self.stats.incr(f'db.{name}.error.{error.__class__.__name__}')
 
     def connect_to_rabbitmq(self):
         """Connect to RabbitMQ returning the connection handle."""
