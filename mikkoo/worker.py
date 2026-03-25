@@ -5,6 +5,7 @@ Connects to Postgres and processes PgQ batches, publishing the events in
 the batch to RabbitMQ.
 
 """
+
 import asyncio
 import copy
 import datetime
@@ -41,8 +42,7 @@ LOGGER = logging.getLogger(__name__)
 
 
 class Process(multiprocessing.Process, state.State):
-
-    AMQP_APP_ID = 'mikkoo/%s' % __version__
+    AMQP_APP_ID = f'mikkoo/{__version__}'
     DEFAULT_CONSUMER_NAME = 'mikkoo'
     DEFAULT_MAX_FAILURES = 10
     DEFAULT_RETRY_INTERVAL = 10
@@ -52,7 +52,7 @@ class Process(multiprocessing.Process, state.State):
     PROCESSED = 'processed'
     PENDING = 'pending_events'
     STATE_PROCESSING = 0x04
-    VALID_PROPERTIES = [
+    VALID_PROPERTIES: typing.ClassVar[list[str]] = [
         'app_id',
         'content_encoding',
         'content_type',
@@ -64,46 +64,47 @@ class Process(multiprocessing.Process, state.State):
         'priority',
         'timestamp',
         'type',
-        'user_id'
+        'user_id',
     ]
 
-    def __init__(self,
-                 group=None,
-                 target=None,
-                 name=None,
-                 args=(),
-                 kwargs=None):
+    def __init__(
+        self, group=None, target=None, name=None, args=(), kwargs=None
+    ):
         if kwargs is None:
             kwargs = {}
-        super(Process, self).__init__(group, target, name, args, kwargs)
+        super().__init__(group, target, name, args, kwargs)
         self.config = kwargs['config']
         self.confirm = kwargs['config']['worker'].get('confirm', False)
         self.consumer_name = kwargs['config']['worker'].get(
-            'consumer_name', self.DEFAULT_CONSUMER_NAME)
-        self.current_batch: typing.Optional[int] = None
-        self.current_event: typing.Optional[dict] = None
-        self.event_list: typing.Optional[typing.List[dict]] = None
-        self.event_processed: typing.Optional[asyncio.Future] = None
-        self.ioloop: typing.Optional[asyncio.AbstractEventLoop] = None
-        self.last_stats_time: typing.Optional[float] = None
+            'consumer_name', self.DEFAULT_CONSUMER_NAME
+        )
+        self.current_batch: int | None = None
+        self.current_event: dict | None = None
+        self.event_list: list[dict] | None = None
+        self.event_processed: asyncio.Future | None = None
+        self.ioloop: asyncio.AbstractEventLoop | None = None
+        self.last_stats_time: float | None = None
         self.maximum_failures = kwargs['config']['worker'].get(
-            'max_failures', self.DEFAULT_MAX_FAILURES)
-        self.postgres: typing.Optional[psycopg.AsyncConnection] = None
-        self.postgres_cursor: typing.Optional[psycopg.ClientCursor] = None
-        self.rabbitmq: typing.Optional[
-            asyncio_connection.AsyncioConnection] = None
-        self.rabbitmq_channel: typing.Optional[pika.channel.Channel] = None
+            'max_failures', self.DEFAULT_MAX_FAILURES
+        )
+        self.postgres: psycopg.AsyncConnection | None = None
+        self.postgres_cursor: psycopg.ClientCursor | None = None
+        self.rabbitmq: asyncio_connection.AsyncioConnection | None = None
+        self.rabbitmq_channel: pika.channel.Channel | None = None
         self.retry_interval = kwargs['config']['worker'].get(
-            'retry_interval', self.DEFAULT_RETRY_INTERVAL)
+            'retry_interval', self.DEFAULT_RETRY_INTERVAL
+        )
         self.state = self.STATE_INITIALIZING
         self.state_start = time.time()
         self.stats = stats.Stats(
             self.name,
             kwargs['worker_name'],
-            kwargs['config'].get('statsd', {}))
+            kwargs['config'].get('statsd', {}),
+        )
         self.stats_queue: multiprocessing.Queue = kwargs['stats_queue']
         self.wait_duration = kwargs['config']['worker'].get(
-            'wait_duration', self.DEFAULT_WAIT_DURATION)
+            'wait_duration', self.DEFAULT_WAIT_DURATION
+        )
         self.worker_config = kwargs['config']['worker']
         self.worker_name = kwargs['worker_name']
 
@@ -112,10 +113,8 @@ class Process(multiprocessing.Process, state.State):
                 self.config['sentry_dsn'],
                 release=__version__,
                 environment=os.getenv('ENVIRONMENT', 'unknown'),
-                in_app_include=['arrow',
-                                'mikkoo',
-                                'pika',
-                                'psycopg'])
+                in_app_include=['arrow', 'mikkoo', 'pika', 'psycopg'],
+            )
             sentry_sdk.set_context('mikkoo', {'worker': self.name})
 
         # Override ACTIVE with PROCESSING
@@ -129,7 +128,8 @@ class Process(multiprocessing.Process, state.State):
                 self.worker_config.get('postgres_url'),
                 cursor_factory=psycopg.AsyncClientCursor,
                 row_factory=rows.dict_row,
-                autocommit=True)
+                autocommit=True,
+            )
         except psycopg.OperationalError as error:
             self.send_exception_to_sentry()
             LOGGER.error('Error connecting to Postgres: %s', error)
@@ -138,13 +138,19 @@ class Process(multiprocessing.Process, state.State):
         return True
 
     def build_sql(self, proc_name: str, *args) -> str:
-        return sql.SQL('SELECT * FROM {proc_name}({values})'.format(
-            proc_name=proc_name,
-            values=','.join('%s' for _a in range(0, len(args))))).as_string(
-                self.postgres)
+        placeholders = sql.SQL(',').join(sql.Placeholder() for _ in args)
+        return (
+            sql.SQL('SELECT * FROM {}({})')
+            .format(
+                sql.Identifier(*proc_name.split('.')),
+                placeholders,
+            )
+            .as_string(self.postgres)
+        )
 
-    async def callproc(self, proc_name: str, *args) \
-            -> typing.Optional[typing.Sequence[dict]]:
+    async def callproc(
+        self, proc_name: str, *args
+    ) -> typing.Sequence[dict] | None:
         """Call the stored procedure in Postgres with the specified
         arguments.
 
@@ -166,16 +172,20 @@ class Process(multiprocessing.Process, state.State):
             except psycopg.InternalError as error:
                 self.send_exception_to_sentry()
                 self.log_db_error(proc_name, error)
-                raise PgQError(str(error))
+                raise PgQError(str(error)) from error
             except psycopg.Error as error:
                 self.send_exception_to_sentry()
                 self.log_db_error(proc_name, error)
 
-    def log_db_error(self, name: str, error: Exception) -> typing.NoReturn:
+    def log_db_error(self, name: str, error: Exception) -> None:
         """Log database errors and increment the stats counter"""
-        LOGGER.error('Error executing %s.callproc: (%s) %s', name,
-                     error.__class__.__name__, error)
-        self.stats.incr('db.{0}.error.{1}'.format(name, str(error)))
+        LOGGER.error(
+            'Error executing %s.callproc: (%s) %s',
+            name,
+            error.__class__.__name__,
+            error,
+        )
+        self.stats.incr(f'db.{name}.error.{error.__class__.__name__}')
 
     def connect_to_rabbitmq(self):
         """Connect to RabbitMQ returning the connection handle."""
@@ -184,7 +194,8 @@ class Process(multiprocessing.Process, state.State):
             self.connection_parameters,
             on_open_callback=self.on_rabbitmq_open,
             on_open_error_callback=self.on_rabbitmq_open_error,
-            on_close_callback=self.on_rabbitmq_closed)
+            on_close_callback=self.on_rabbitmq_closed,
+        )
 
     @property
     def connection_parameters(self) -> pika.ConnectionParameters:
@@ -209,18 +220,22 @@ class Process(multiprocessing.Process, state.State):
             self.worker_config['rabbitmq'].get('vhost', '/'),
             pika.PlainCredentials(
                 self.worker_config['rabbitmq'].get('username', 'guest'),
-                self.worker_config['rabbitmq'].get('password', 'guest')),
+                self.worker_config['rabbitmq'].get('password', 'guest'),
+            ),
             ssl_options=self.connection_parameters_ssl_options,
             frame_max=self.worker_config['rabbitmq'].get(
-                'frame_max', spec.FRAME_MAX_SIZE),
+                'frame_max', spec.FRAME_MAX_SIZE
+            ),
             socket_timeout=self.worker_config['rabbitmq'].get(
-                'socket_timeout', 10),
+                'socket_timeout', 10
+            ),
             heartbeat=self.worker_config['rabbitmq'].get(
-                'heartbeat_interval', 300))
+                'heartbeat_interval', 300
+            ),
+        )
 
     @property
-    def connection_parameters_ssl_options(self) \
-            -> typing.Optional[pika.SSLOptions]:
+    def connection_parameters_ssl_options(self) -> pika.SSLOptions | None:
         """Return the `pika.SSLOptions` parameter for the pika connection
 
         The expected ssl_options values in the config are:
@@ -240,14 +255,22 @@ class Process(multiprocessing.Process, state.State):
             return
 
         context = ssl.SSLContext(
-            protocol=int(ssl_options.get('protocol', ssl.PROTOCOL_TLS)))
+            protocol=int(ssl_options.get('protocol', ssl.PROTOCOL_TLS))
+        )
 
         # Load a set of certification authority (CA) certificates
-        if any([ssl_options.get('ca_certs'), ssl_options.get('ca_path'),
-                ssl_options.get('ca_data')]):
-            context.load_verify_locations(ssl_options.get('ca_certs'),
-                                          ssl_options.get('ca_path'),
-                                          ssl_options.get('ca_data'))
+        if any(
+            [
+                ssl_options.get('ca_certs'),
+                ssl_options.get('ca_path'),
+                ssl_options.get('ca_data'),
+            ]
+        ):
+            context.load_verify_locations(
+                ssl_options.get('ca_certs'),
+                ssl_options.get('ca_path'),
+                ssl_options.get('ca_data'),
+            )
 
         # Load a private key and the corresponding certificate
         if ssl_options.get('certfile'):
@@ -262,9 +285,9 @@ class Process(multiprocessing.Process, state.State):
 
         return pika.SSLOptions(context=context)
 
-    def on_rabbitmq_open(self,
-                         conn: asyncio_connection.AsyncioConnection) \
-            -> typing.NoReturn:
+    def on_rabbitmq_open(
+        self, conn: asyncio_connection.AsyncioConnection
+    ) -> None:
         """This method is called by pika once the connection to RabbitMQ has
         been established. It passes the handle to the connection object in
         case we need it, but in this case, we'll just mark it unused.
@@ -276,28 +299,31 @@ class Process(multiprocessing.Process, state.State):
 
         try:
             self.rabbitmq.channel(
-                on_open_callback=self.on_rabbitmq_channel_open)
+                on_open_callback=self.on_rabbitmq_channel_open
+            )
         except exceptions.ConnectionClosed as err:
             LOGGER.warning('Channel open on closed connection')
             self.on_rabbitmq_closed(self.rabbitmq, err)
             return
 
         self.rabbitmq.add_on_connection_blocked_callback(
-            self.on_rabbitmq_blocked)
+            self.on_rabbitmq_blocked
+        )
         self.rabbitmq.add_on_connection_unblocked_callback(
-            self.on_rabbitmq_unblocked)
+            self.on_rabbitmq_unblocked
+        )
 
-    def on_rabbitmq_open_error(self,
-                               _c: connection.Connection,
-                               exc: typing.Union[str, Exception]) -> None:
+    def on_rabbitmq_open_error(
+        self, _c: connection.Connection, exc: str | Exception
+    ) -> None:
         """Connection to RabbitMQ failed, so shut things down."""
         LOGGER.critical('Could not connect to RabbitMQ: %r', exc)
         self.stats.incr('amqp.connection_failed')
         self.on_ready_to_stop()
 
-    def on_rabbitmq_blocked(self,
-                            _c: connection.Connection,
-                            _f: frame.Method) -> typing.NoReturn:
+    def on_rabbitmq_blocked(
+        self, _c: connection.Connection, _f: frame.Method
+    ) -> None:
         """Invoked when the RabbitMQ connection has notified us that it is
         blocking publishing.
 
@@ -306,9 +332,9 @@ class Process(multiprocessing.Process, state.State):
         self.stats.incr('amqp.connection_blocked')
         self.set_state(self.STATE_BLOCKED)
 
-    def on_rabbitmq_unblocked(self,
-                              _c: connection.Connection,
-                              _f: frame.Method) -> typing.NoReturn:
+    def on_rabbitmq_unblocked(
+        self, _c: connection.Connection, _f: frame.Method
+    ) -> None:
         """Invoked when the RabbitMQ connection has notified us that
         publishing is no longer unblocked.
 
@@ -316,23 +342,27 @@ class Process(multiprocessing.Process, state.State):
         LOGGER.info('RabbitMQ is no longer blocking the connection')
         self.stats.incr('amqp.connection_unblocked')
         if self.event_list:
-            LOGGER.debug('Resuming the processing of %i events',
-                         len(self.event_list))
+            LOGGER.debug(
+                'Resuming the processing of %i events', len(self.event_list)
+            )
             self.set_state(self.STATE_PROCESSING)
             self.async_call_soon(self.process_event)
         else:
             self.set_state(self.STATE_IDLE)
             self.async_call_soon(self.process_batch)
 
-    def on_rabbitmq_closed(self,
-                           _conn: asyncio_connection.AsyncioConnection,
-                           error: Exception) -> typing.NoReturn:
+    def on_rabbitmq_closed(
+        self, _conn: asyncio_connection.AsyncioConnection, error: Exception
+    ) -> None:
         """This method is invoked by pika when the connection to RabbitMQ is
         closed unexpectedly. Shutdown if not already doing so.
 
         """
-        LOGGER.critical('Connection from RabbitMQ closed in state %s (%)',
-                        self.state_description, error)
+        LOGGER.critical(
+            'Connection from RabbitMQ closed in state %s (%s)',
+            self.state_description,
+            error,
+        )
         self.set_state(self.STATE_CLOSED)
         self.rabbitmq_channel = None
         self.stats.incr('amqp.connection_closed')
@@ -347,13 +377,13 @@ class Process(multiprocessing.Process, state.State):
         LOGGER.debug('Opening a new channel')
         try:
             self.rabbitmq.channel(
-                on_open_callback=self.on_rabbitmq_channel_open)
+                on_open_callback=self.on_rabbitmq_channel_open
+            )
         except exceptions.ConnectionWrongStateError as err:
             LOGGER.critical('Channel Open on closed connection: %s', err)
             self.on_ready_to_stop()
 
-    def on_rabbitmq_channel_open(self, channel: pika.channel.Channel) \
-            -> typing.NoReturn:
+    def on_rabbitmq_channel_open(self, channel: pika.channel.Channel) -> None:
         """This method is invoked by pika when the channel has been opened. It
         will change the state to IDLE, add the callbacks and set up the channel
         to start consuming.
@@ -363,22 +393,25 @@ class Process(multiprocessing.Process, state.State):
         self.stats.incr('amqp.channel_opened')
         self.rabbitmq_channel = channel
         self.rabbitmq_channel.add_on_close_callback(
-            self.on_rabbitmq_channel_closed)
+            self.on_rabbitmq_channel_closed
+        )
         if self.confirm:
             LOGGER.info('Enabling publisher confirmations')
             self.rabbitmq_channel.add_on_return_callback(
-                self.on_rabbitmq_publish_return)
+                self.on_rabbitmq_publish_return
+            )
             self.rabbitmq_channel.confirm_delivery(
-                self.on_rabbitmq_publish_confirm)
+                self.on_rabbitmq_publish_confirm
+            )
 
         # Schedule the processing of the first batch if it's not reopening
         if not self.is_reconnecting:
             self.set_state(self.STATE_IDLE)
             self.async_call_soon(self.process_batch)
 
-    def on_rabbitmq_channel_closed(self,
-                                   channel: pika.channel.Channel,
-                                   error: Exception) -> typing.NoReturn:
+    def on_rabbitmq_channel_closed(
+        self, channel: pika.channel.Channel, error: Exception
+    ) -> None:
         """Invoked by pika when RabbitMQ unexpectedly closes the channel.
         Channels are usually closed if you attempt to do something that
         violates the protocol, such as re-declare an exchange or queue with
@@ -386,40 +419,61 @@ class Process(multiprocessing.Process, state.State):
         to shut down the object.
 
         """
-        LOGGER.warning('Channel %i closed: %s',
-                       channel.channel_number, error)
+        LOGGER.warning('Channel %i closed: %s', channel.channel_number, error)
         self.stats.incr('amqp.channel_closed')
         self.rabbitmq_channel = None
-        if self.rabbitmq.is_open and self.event_processed:
+        if isinstance(
+            error,
+            (
+                exceptions.StreamLostError,
+                exceptions.ConnectionClosedByBroker,
+            ),
+        ):
+            LOGGER.warning(
+                'Connection-level failure detected, initiating full reconnect'
+            )
+            self.ioloop.call_soon(self.connect_to_rabbitmq)
+            return
+        if (
+            self.rabbitmq
+            and self.rabbitmq.is_open
+            and not self.rabbitmq.is_closing
+            and self.event_processed
+        ):
             self.set_state(self.STATE_RECONNECTING)
             self.open_rabbitmq_channel()
         else:
             self.on_ready_to_stop()
 
-    def on_rabbitmq_publish_confirm(self,
-                                    _f: pika.frame.Method) -> typing.NoReturn:
+    def on_rabbitmq_publish_confirm(self, _f: pika.frame.Method) -> None:
         """Invoked by pika when a delivery confirmation is received."""
         if self.event_processed and self.current_event:
             LOGGER.debug('Event %s confirmed', self.current_event['ev_id'])
             self.stats.incr('amqp.publisher_confirm')
             self.event_processed.set_result(True)
 
-    def on_rabbitmq_publish_return(self,
-                                   _c: pika.channel.Channel,
-                                   method: spec.Basic.Return,
-                                   _p: spec.BasicProperties,
-                                   _b: bytes) -> typing.NoReturn:
+    def on_rabbitmq_publish_return(
+        self,
+        _c: pika.channel.Channel,
+        method: spec.Basic.Return,
+        _p: spec.BasicProperties,
+        _b: bytes,
+    ) -> None:
         """Invoked by pika when a delivery failure is received. Setting the
         current confirmation future exception to a
         :class:`mikkoo.worker.EventError`.
 
         """
-        LOGGER.debug('Event %s was returned as (%s) %s from RabbitMQ',
-                     self.current_event['ev_id'], method.reply_code,
-                     method.reply_text)
+        LOGGER.debug(
+            'Event %s was returned as (%s) %s from RabbitMQ',
+            self.current_event['ev_id'],
+            method.reply_code,
+            method.reply_text,
+        )
         self.stats.incr('amqp.message_returned')
         self.event_processed.set_exception(
-            EventError(self.current_event, method.reply_text))
+            EventError(self.current_event, method.reply_text)
+        )
 
     async def process_batch(self):
         """Query PgQ for a batch and process it, scheduling the next execution
@@ -427,27 +481,31 @@ class Process(multiprocessing.Process, state.State):
 
         """
         if not self.is_idle:
-            LOGGER.warning('Process batch invoked while %s',
-                           self.state_description)
+            LOGGER.warning(
+                'Process batch invoked while %s', self.state_description
+            )
             return
 
         self.set_state(self.STATE_PROCESSING)
         batch = None
         try:
             batch = await self.callproc(
-                'pgq.next_batch', self.worker_name, self.consumer_name)
+                'pgq.next_batch', self.worker_name, self.consumer_name
+            )
         except PgQError:
             pass
 
         if not batch or (batch and batch[0].get('next_batch') is None):
             self.stats.incr('empty_queue')
-            LOGGER.debug('Empty queue, sleeping for %.2f seconds',
-                         self.wait_duration)
+            LOGGER.debug(
+                'Empty queue, sleeping for %.2f seconds', self.wait_duration
+            )
             self.set_state(self.STATE_IDLE)
             self.stats.add_timing('sleep', self.wait_duration)
             self.ioloop.call_later(
                 self.wait_duration,
-                lambda: asyncio.ensure_future(self.process_batch()))
+                lambda: asyncio.ensure_future(self.process_batch()),
+            )
             return
 
         self.current_batch = batch[0]['next_batch']
@@ -455,7 +513,8 @@ class Process(multiprocessing.Process, state.State):
 
         try:
             self.event_list = await self.callproc(
-                'pgq.get_batch_events', self.current_batch)
+                'pgq.get_batch_events', self.current_batch
+            )
         except PgQError as error:
             LOGGER.error('Error getting batch: %s', error)
             self.set_state(self.STATE_IDLE)
@@ -482,8 +541,11 @@ class Process(multiprocessing.Process, state.State):
         if not self.event_list:
             return self.on_batch_complete()
         elif not self.is_processing:
-            LOGGER.debug('Processing of %i events paused due to %s state',
-                         len(self.event_list), self.state_description)
+            LOGGER.debug(
+                'Processing of %i events paused due to %s state',
+                len(self.event_list),
+                self.state_description,
+            )
             return
 
         self.event_processed = asyncio.Future()
@@ -493,12 +555,18 @@ class Process(multiprocessing.Process, state.State):
         self.stats.incr(f'publish.{event["ev_extra1"]}.{event["ev_type"]}')
         try:
             self.rabbitmq_channel.basic_publish(
-                event['ev_extra1'], event['ev_type'], event['ev_data'],
-                self.build_properties_kwargs(event), mandatory=True)
+                event['ev_extra1'],
+                event['ev_type'],
+                event['ev_data'],
+                self.build_properties_kwargs(event),
+                mandatory=True,
+            )
         except TypeError as error:
             self.event_processed.set_exception(
-                EventError(event,
-                           f'Error building kwargs for the event: {error}'))
+                EventError(
+                    event, f'Error building kwargs for the event: {error}'
+                )
+            )
             self.send_exception_to_sentry()
         if not self.confirm:
             self.event_processed.set_result(True)
@@ -512,7 +580,7 @@ class Process(multiprocessing.Process, state.State):
             'app_id': self.AMQP_APP_ID,
             'content_type': event['ev_extra2'],
             'correlation_id': str(uuid.uuid4()),
-            'timestamp': self.get_timestamp(event['ev_time'])
+            'timestamp': self.get_timestamp(event['ev_time']),
         }
         if event['ev_extra4']:
             kwargs['headers'] = json.loads(event['ev_extra4'].encode('utf-8'))
@@ -520,12 +588,13 @@ class Process(multiprocessing.Process, state.State):
             try:
                 properties = json.loads(event['ev_extra3'])
             except ValueError:
-                LOGGER.warning('Failed to decode ev_extra3: %r',
-                               event['ev_extra3'])
+                LOGGER.warning(
+                    'Failed to decode ev_extra3: %r', event['ev_extra3']
+                )
                 properties = {}
             for key in properties:
-                if key.encode('ascii') in self.VALID_PROPERTIES:
-                    kwargs[key.encode('ascii')] = properties[key]
+                if key in self.VALID_PROPERTIES:
+                    kwargs[key] = properties[key]
         if 'headers' not in kwargs:
             kwargs['headers'] = {}
 
@@ -533,7 +602,8 @@ class Process(multiprocessing.Process, state.State):
         kwargs['headers'].setdefault('sequence', str(uuid7()))
         kwargs['headers'].setdefault('txid', event['ev_txid'])
         kwargs['headers'].setdefault(
-            'timestamp', arrow.get(event['ev_time']).to('utc').isoformat())
+            'timestamp', arrow.get(event['ev_time']).to('utc').isoformat()
+        )
         return pika.BasicProperties(**kwargs)
 
     @staticmethod
@@ -554,13 +624,13 @@ class Process(multiprocessing.Process, state.State):
             self.stats.incr(self.ERROR)
             LOGGER.error(str(exc))
             if exc.event.get('ev_retry', 0) >= self.maximum_failures:
-                LOGGER.warning('Discarding event %s: %r',
-                               exc.event['ev_id'],
-                               exc.event)
+                LOGGER.warning(
+                    'Discarding event %s: %r', exc.event['ev_id'], exc.event
+                )
             else:
                 self.async_call_soon(
-                    self.on_event_error,  self.current_batch,
-                    exc.event['ev_id'])
+                    self.on_event_error, self.current_batch, exc.event['ev_id']
+                )
         else:
             self.stats.incr(self.PROCESSED)
         self.current_event = None
@@ -569,7 +639,8 @@ class Process(multiprocessing.Process, state.State):
     async def on_event_error(self, batch, ev_id):
         LOGGER.debug('on_event_error %s %s', batch, ev_id)
         await self.callproc(
-            'pgq.event_retry', batch, ev_id, self.retry_interval)
+            'pgq.event_retry', batch, ev_id, self.retry_interval
+        )
 
     def run(self):
         """Entry-point that is automatically invoked as part of the
@@ -581,7 +652,8 @@ class Process(multiprocessing.Process, state.State):
 
         """
         self.set_state(self.STATE_INITIALIZING)
-        self.ioloop = asyncio.get_event_loop()
+        self.ioloop = asyncio.new_event_loop()
+        asyncio.set_event_loop(self.ioloop)
         self.ioloop.run_until_complete(self.setup())
         if not self.is_stopped:
             LOGGER.info('%s worker started', self.name)
@@ -591,10 +663,11 @@ class Process(multiprocessing.Process, state.State):
                 LOGGER.warning('CTRL-C while waiting for clean shutdown')
             finally:
                 self.ioloop.run_until_complete(
-                    self.ioloop.shutdown_asyncgens())
+                    self.ioloop.shutdown_asyncgens()
+                )
                 self.ioloop.close()
 
-    async def setup(self) -> typing.NoReturn:
+    async def setup(self) -> None:
         """Ensure that all the things that are required are set up when the
         Process is started.
 
@@ -618,19 +691,18 @@ class Process(multiprocessing.Process, state.State):
         self.setup_signal_handlers()
         self.connect_to_rabbitmq()
 
-    async def create_queue(self) -> typing.NoReturn:
+    async def create_queue(self) -> None:
         """Create the PgQ for the worker."""
         LOGGER.debug('Fetching PgQ information')
         result = await self.callproc('pgq.create_queue', self.worker_name)
         if not result:
             LOGGER.debug('Queue already exists')
 
-    async def register_consumer(self) -> typing.NoReturn:
-        """Register the consumer. If registration fails, shutdown the worker.
-
-        """
+    async def register_consumer(self) -> None:
+        """Register the consumer. If registration fails, shutdown the worker."""
         results = await self.callproc(
-            'pgq.register_consumer', self.worker_name, self.consumer_name)
+            'pgq.register_consumer', self.worker_name, self.consumer_name
+        )
         if not results:
             LOGGER.critical('Registration of the consumer failed')
             self.async_call_soon(self.stop)
@@ -638,12 +710,13 @@ class Process(multiprocessing.Process, state.State):
         elif not results[0]['register_consumer']:
             LOGGER.debug('Consumer is already registered')
 
-    async def unregister_consumer(self) -> typing.NoReturn:
+    async def unregister_consumer(self) -> None:
         """Unregister the consumer with PgQ"""
         await self.callproc(
-            'pgq.unregister_consumer', self.worker_name, self.consumer_name)
+            'pgq.unregister_consumer', self.worker_name, self.consumer_name
+        )
 
-    def on_ready_to_stop(self) -> typing.NoReturn:
+    def on_ready_to_stop(self) -> None:
         """Invoked when the worker is shutting down and is no longer processing
         a PgQ batch.
 
@@ -682,15 +755,15 @@ class Process(multiprocessing.Process, state.State):
         self.ioloop.add_signal_handler(signal.SIGPROF, self.on_sigprof)
         LOGGER.debug('Signal handlers setup')
 
-    def async_call_soon(self, func: typing.Callable, *args) -> typing.NoReturn:
-        self.ioloop.call_soon(asyncio.ensure_future(func(*args)))
+    def async_call_soon(self, func: typing.Callable, *args) -> None:
+        self.ioloop.call_soon(lambda: asyncio.ensure_future(func(*args)))
 
-    def on_sigabrt(self) -> typing.NoReturn:
+    def on_sigabrt(self) -> None:
         """Invoked when the MCP sends a SIGABRT to shut down the worker"""
         LOGGER.debug('on_sigabrt when %s', self.state_description)
         self.async_call_soon(self.stop)
 
-    def on_sigprof(self) -> typing.NoReturn:
+    def on_sigprof(self) -> None:
         """Called when SIGPROF is sent to the process, will dump the stats, in
         future versions, queue them for the master process to get data.
 
@@ -703,12 +776,13 @@ class Process(multiprocessing.Process, state.State):
         """Invoked by the IOLoop"""
         LOGGER.debug('Submitting stats report')
         result = await self.callproc(
-            'pgq.get_consumer_info', self.worker_name, self.consumer_name)
+            'pgq.get_consumer_info', self.worker_name, self.consumer_name
+        )
         self.stats.set_gauge(self.PENDING, result[0].get('pending_events', 0))
         self.stats_queue.put(self.stats.report(), True)
         self.last_stats_time = time.time()
 
-    async def stop(self) -> typing.NoReturn:
+    async def stop(self) -> None:
         """Stop the consumer from consuming by calling BasicCancel and setting
         our state.
         """
@@ -735,13 +809,13 @@ class Process(multiprocessing.Process, state.State):
         self.on_ready_to_stop()
 
     @staticmethod
-    def send_exception_to_sentry() -> typing.NoReturn:
+    def send_exception_to_sentry() -> None:
         """Send an exception to Sentry if enabled."""
         if sentry_sdk:
             sentry_sdk.capture_exception(sys.exc_info())
 
     @staticmethod
-    def set_sentry_context(tag: str, value: str) -> typing.NoReturn:
+    def set_sentry_context(tag: str, value: str) -> None:
         """Set a context tag in Sentry for the given key and value."""
         if sentry_sdk:
             LOGGER.debug('Setting sentry context for %s to %s', tag, value)
@@ -750,6 +824,7 @@ class Process(multiprocessing.Process, state.State):
 
 class MikkooError(Exception):
     """Base class for all Mikkoo exceptions"""
+
     pass
 
 
@@ -760,15 +835,16 @@ class EventError(MikkooError):
     :param str msg: The error message
 
     """
+
     def __init__(self, event, msg):
         self.event = copy.deepcopy(event)
         self.msg = msg
 
     def __repr__(self):
-        return '<EventError event={0}>'.format(self.event['ev_id'])
+        return f'<EventError event={self.event["ev_id"]}>'
 
     def __str__(self):
-        return 'EventError ({0}): {1}'.format(self.event['ev_id'], self.msg)
+        return f'EventError ({self.event["ev_id"]}): {self.msg}'
 
 
 class PgQError(MikkooError):

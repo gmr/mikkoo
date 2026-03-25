@@ -2,6 +2,7 @@
 Base State Tracking Class
 
 """
+
 import logging
 import time
 import typing
@@ -14,6 +15,7 @@ class State:
     internal state of the application.
 
     """
+
     # State constants
     STATE_INITIALIZING = 0x01
     STATE_CONNECTING = 0x02
@@ -28,7 +30,7 @@ class State:
     STATE_CLOSED = 0x11
 
     # For reverse lookup
-    STATES = {
+    STATES: typing.ClassVar[dict[int, str]] = {
         0x01: 'Initializing',
         0x02: 'Connecting',
         0x03: 'Idle',
@@ -39,7 +41,7 @@ class State:
         0x08: 'Stopped',
         0x09: 'Reconnecting',
         0x10: 'Blocked',
-        0x11: 'Closed'
+        0x11: 'Closed',
     }
 
     def __init__(self):
@@ -55,8 +57,11 @@ class State:
         """
         if new_state not in self.STATES:
             raise ValueError(f'Invalid state value: {new_state}')
-        LOGGER.debug('State changing from %s to %s', self.STATES[self.state],
-                     self.STATES[new_state])
+        LOGGER.debug(
+            'State changing from %s to %s',
+            self.STATES[self.state],
+            self.STATES[new_state],
+        )
         self.state = new_state
         self.state_start = time.time()
 
@@ -83,8 +88,11 @@ class State:
     @property
     def is_running(self) -> bool:
         """Indicates if the process is in a running state"""
-        return self.state in [self.STATE_IDLE, self.STATE_ACTIVE,
-                              self.STATE_SLEEPING]
+        return self.state in [
+            self.STATE_IDLE,
+            self.STATE_ACTIVE,
+            self.STATE_SLEEPING,
+        ]
 
     @property
     def is_shutting_down(self) -> bool:

@@ -3,11 +3,11 @@ Stats class that wraps the collections.Counter object and transparently
 passes calls to increment and add_timing if statsd is enabled.
 
 """
+
 import collections
 import contextlib
 import socket
 import time
-import typing
 
 try:
     from sprockets_statsd import statsd
@@ -16,7 +16,6 @@ except ImportError:
 
 
 class Stats:
-
     DEFAULT_PREFIX = 'mikkoo'
     PAYLOAD_HOSTNAME = '{}.{}.{}.{}:{}'
     PAYLOAD_NO_HOSTNAME = '{}.{}.{}:{}'
@@ -24,13 +23,14 @@ class Stats:
     def __init__(self, name: str, worker_name: str, statsd_cfg: dict):
         self.name = name
         self.worker_name = worker_name
-        self.statsd: typing.Optional[statsd.Connector] = None
+        self.statsd: statsd.Connector | None = None
         if statsd_cfg.get('enabled', False) and statsd:
             self.statsd = statsd.Connector(
-                host=statsd_cfg.get('host'), port=statsd_cfg.get('port'),
+                host=statsd_cfg.get('host'),
+                port=statsd_cfg.get('port'),
                 prefix=self._statsd_prefix(statsd_cfg),
-                ip_protocol=socket.IPPROTO_TCP if statsd_cfg.get('tcp')
-                else socket.IPPROTO_TCP)
+                ip_protocol=socket.IPPROTO_TCP,
+            )
         self.counter = collections.Counter()
         self.previous = None
 
@@ -78,7 +78,7 @@ class Stats:
             'name': self.name,
             'counts': dict(self.counter),
             'previous': self.previous,
-            'worker_name': self.worker_name
+            'worker_name': self.worker_name,
         }
         self.previous = dict(self.counter)
         return values
@@ -100,6 +100,8 @@ class Stats:
             return '{}.{}.{}'.format(
                 config.get('prefix', self.DEFAULT_PREFIX),
                 socket.gethostname().split('.')[0],
-                self.name)
+                self.name,
+            )
         return '{}.{}'.format(
-            config.get('prefix', self.DEFAULT_PREFIX), self.name)
+            config.get('prefix', self.DEFAULT_PREFIX), self.name
+        )

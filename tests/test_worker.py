@@ -1,7 +1,9 @@
 """Tests for mikkoo.worker"""
+
 import asyncio
 import copy
 import multiprocessing
+import typing
 from unittest import mock
 
 from pika import channel
@@ -12,28 +14,21 @@ from tests import test_state
 
 
 class TestProcess(test_state.TestState):
-
-    MOCK_ARGS = {
-            'config': {
-                'statsd': {
-                    'enabled': False
-                },
-                'worker': {
-                    'postgres_url': 'postgresql://localhost:5432/postgres',
-                    'rabbitmq': {
-                        'host': 'localhost',
-                        'port': 5672,
-                        'vhost': '/'
-                    },
-                    'processes': 1,
-                    'confirm': False
-                }
+    MOCK_ARGS: typing.ClassVar[dict] = {
+        'config': {
+            'statsd': {'enabled': False},
+            'worker': {
+                'postgres_url': 'postgresql://localhost:5432/postgres',
+                'rabbitmq': {'host': 'localhost', 'port': 5672, 'vhost': '/'},
+                'processes': 1,
+                'confirm': False,
             },
-            'daemon': False,
-            'name': 'test-process',
-            'stats_queue': None,
-            'worker_name': 'test-process-1',
-        }
+        },
+        'daemon': False,
+        'name': 'test-process',
+        'stats_queue': None,
+        'worker_name': 'test-process-1',
+    }
 
     async def asyncSetUp(self):
         await super().asyncSetUp()
@@ -53,9 +48,11 @@ class TestProcess(test_state.TestState):
 
     def new_process(self, kwargs=None):
         with mock.patch('multiprocessing.Process'):
-            return worker.Process(group=None,
-                                  name='MockProcess',
-                                  kwargs=kwargs or self.new_kwargs())
+            return worker.Process(
+                group=None,
+                name='MockProcess',
+                kwargs=kwargs or self.new_kwargs(),
+            )
 
     def new_mock_channel(self):
         return mock.Mock(spec=channel.Channel)
@@ -64,7 +61,7 @@ class TestProcess(test_state.TestState):
         return mock.Mock(spec=asyncio_connection.AsyncioConnection)
 
     def test_app_id(self):
-        expectation = 'mikkoo/%s' % __version__
+        expectation = f'mikkoo/{__version__}'
         self.assertEqual(self._obj.AMQP_APP_ID, expectation)
 
     def test_startup_state(self):
@@ -99,5 +96,7 @@ class TestProcess(test_state.TestState):
 
     def test_state_processing_desc(self):
         self._obj.state = self._obj.STATE_PROCESSING
-        self.assertEqual(self._obj.state_description,
-                         self._obj.STATES[self._obj.STATE_PROCESSING])
+        self.assertEqual(
+            self._obj.state_description,
+            self._obj.STATES[self._obj.STATE_PROCESSING],
+        )

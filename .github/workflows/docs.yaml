@@ -1,0 +1,35 @@
+name: Documentation
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'docs/**'
+      - 'mkdocs.yml'
+      - '.github/workflows/docs.yaml'
+      - 'pyproject.toml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          python-version: "3.14"
+
+      - name: Sync documentation dependencies
+        run: uv sync --group docs
+
+      - name: Build and deploy docs
+        run: uv run mkdocs gh-deploy --force --strict
+
+    concurrency:
+      group: docs-deploy
+      cancel-in-progress: true
