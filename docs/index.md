@@ -16,7 +16,7 @@ and can be installed via `pip`:
 pip install mikkoo
 ```
 
-Once you've setup [Skytools](https://wiki.postgresql.org/wiki/SkyTools) you
+Once you've set up [Skytools](https://wiki.postgresql.org/wiki/SkyTools) you
 may want to install the optional included utility functions in
 [mikkoo.sql](https://github.com/gmr/mikkoo/blob/main/mikkoo.sql) to make
 usage easier.
@@ -24,7 +24,7 @@ usage easier.
 You can do this with a combination of `curl` and `psql`:
 
 ```bash
-curl -L https://github.com/gmr/mikkoo/blob/main/mikkoo.sql | psql
+curl -L https://raw.githubusercontent.com/gmr/mikkoo/main/mikkoo.sql | psql
 ```
 
 This will install multiple stored procedures and an audit table in a mikkoo

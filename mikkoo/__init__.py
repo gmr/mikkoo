@@ -4,6 +4,9 @@ Named for the rabbit in the clever rabbit and the elephant fable.
 
 """
 
-from importlib.metadata import version
+from importlib.metadata import PackageNotFoundError, version
 
-__version__ = version('mikkoo')
+try:
+    __version__ = version('mikkoo')
+except PackageNotFoundError:
+    __version__ = '0.0.0'

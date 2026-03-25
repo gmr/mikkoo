@@ -31,8 +31,5 @@ htmlcov/
 # OS
 .DS_Store
 
-# uv
-uv.lock
-
 # Documentation
 site/

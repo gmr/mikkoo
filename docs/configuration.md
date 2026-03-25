@@ -33,12 +33,12 @@ The following table details the configuration options available per queue:
 
 | Key              | Description                                                        |
 |------------------|--------------------------------------------------------------------|
-| `confirm`        | Enable/Disable RabbitMQ Publisher Confirmations. Default: `True`   |
+| `confirm`        | Enable/Disable RabbitMQ Publisher Confirmations. Default: `False`  |
 | `consumer_name`  | Overwrite the default PgQ consumer name. Default: `mikkoo`         |
 | `max_failures`   | Maximum failures before discarding an event. Default: `10`         |
-| `postgresql_url` | The url for connecting to PostgreSQL                               |
+| `postgres_url`   | The URL for connecting to PostgreSQL                               |
 | `rabbitmq`       | Data structure for connection parameters to connect to RabbitMQ    |
-| `retry_delay`    | How long in seconds until PgQ emits failed events. Default: `10`   |
+| `retry_interval` | How long in seconds until retrying failed events. Default: `10`    |
 | `unregister`     | Unregister a consumer with PgQ on shutdown. Default: `True`        |
 | `wait_duration`  | How long to wait before checking the queue after the last empty result. Default: `10` |
 
@@ -95,7 +95,7 @@ Application:
         password: guest
         ssl_options:
           protocol: 2
-      retry_delay: 5
+      retry_interval: 5
       unregister: False
       wait_duration: 5
 

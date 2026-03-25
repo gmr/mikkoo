@@ -356,7 +356,7 @@ class Process(multiprocessing.Process, state.State):
 
         """
         LOGGER.critical(
-            'Connection from RabbitMQ closed in state %s (%)',
+            'Connection from RabbitMQ closed in state %s (%s)',
             self.state_description,
             error,
         )
