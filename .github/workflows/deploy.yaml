@@ -3,18 +3,30 @@ on:
   push:
     branches-ignore: ["*"]
     tags: ["*"]
+
 jobs:
   deploy:
     runs-on: ubuntu-latest
     if: github.event_name == 'push' && startsWith(github.event.ref, 'refs/tags') && github.repository == 'gmr/mikkoo'
-    container: python:3.11-alpine
+
+    environment:
+      name: pypi
+      url: https://pypi.org/p/mikkoo
+
+    permissions:
+      id-token: write
+
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v1
+        uses: actions/checkout@v6
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          python-version: "3.14"
+
       - name: Build package
-        run: python3 setup.py sdist
+        run: uv run --no-project --with build pyproject-build
+
       - name: Publish package
         uses: pypa/gh-action-pypi-publish@release/v1
-        with:
-          user: __token__
-          password: ${{ secrets.PYPI_SECRET }}

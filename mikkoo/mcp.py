@@ -2,6 +2,7 @@
 Master Control Program
 
 """
+
 import logging
 import multiprocessing
 import os
@@ -25,9 +26,10 @@ class Worker:
     the MCP
 
     """
-    def __init__(self,
-                 config: helper.config.Config,
-                 stats_queue: multiprocessing.Queue):
+
+    def __init__(
+        self, config: helper.config.Config, stats_queue: multiprocessing.Queue
+    ):
         self.config = config
         self.process = None
         self.stats_queue = stats_queue
@@ -47,7 +49,7 @@ class MasterControlProgram(state.State):
         """Initialize the Master Control Program"""
         self.set_process_name()
         LOGGER.info('Mikkoo v%s initializing', __version__)
-        super(MasterControlProgram, self).__init__()
+        super().__init__()
         self.config = config
         self.last_poll_results = {}
         self.poll_data = {'time': 0, 'processes': []}
@@ -59,13 +61,15 @@ class MasterControlProgram(state.State):
         self.workers = {}
         for name in config.application.workers.keys():
             self.workers[name] = Worker(
-                config.application.workers[name], self.stats_queue)
+                config.application.workers[name], self.stats_queue
+            )
 
         self.poll_interval = config.application.get(
-            'poll_interval', self.POLL_INTERVAL)
+            'poll_interval', self.POLL_INTERVAL
+        )
 
     @property
-    def active_processes(self) -> typing.List[psutil.Process]:
+    def active_processes(self) -> list[psutil.Process]:
         """Return a list of all active processes, pruning dead ones"""
         active_processes, dead_processes = [], []
         for name in self.workers.keys():
@@ -115,7 +119,7 @@ class MasterControlProgram(state.State):
             'last_poll': timestamp,
             'workers': worker_stats,
             'process_data': data,
-            'counts': stats
+            'counts': stats,
         }
 
     def check_processes(self) -> typing.NoReturn:
@@ -125,12 +129,15 @@ class MasterControlProgram(state.State):
             if self.workers[name].unresponsive >= self.MAX_UNRESPONSIVE:
                 if self.workers[name].process:
                     LOGGER.info('Killing unresponsive %s worker', name)
-                    os.kill(int(self.workers[name].process.pid),
-                            signal.SIGKILL)
+                    os.kill(
+                        int(self.workers[name].process.pid), signal.SIGKILL
+                    )
                 self.workers[name].process = None
         for name in self.workers.keys():
-            if (not self.workers[name].process or
-                    not self.workers[name].process.is_alive()):
+            if (
+                not self.workers[name].process
+                or not self.workers[name].process.is_alive()
+            ):
                 self.start_process(name)
 
     def collect_results(self, data_values: dict) -> typing.NoReturn:
@@ -155,7 +162,7 @@ class MasterControlProgram(state.State):
             worker.Process.BATCHES: 0,
             worker.Process.ERROR: 0,
             worker.Process.PROCESSED: 0,
-            worker.Process.PENDING: 0
+            worker.Process.PENDING: 0,
         }
 
     @staticmethod
@@ -186,8 +193,9 @@ class MasterControlProgram(state.State):
             processes = self.active_processes
             for process in processes:
                 if int(process.pid) != int(os.getpid()):
-                    LOGGER.warning('Killing %s (%s)',
-                                   process.name, process.pid)
+                    LOGGER.warning(
+                        'Killing %s (%s)', process.name, process.pid
+                    )
                     os.kill(int(process.pid), signal.SIGKILL)
             time.sleep(0.5)
 
@@ -201,20 +209,25 @@ class MasterControlProgram(state.State):
             return
 
         if self.poll_data['processes']:
-            LOGGER.warning('%i process(es) did not respond with stats: %r',
-                           len(self.poll_data['processes']),
-                           self.poll_data['processes'])
+            LOGGER.warning(
+                '%i process(es) did not respond with stats: %r',
+                len(self.poll_data['processes']),
+                self.poll_data['processes'],
+            )
             for name in self.poll_data['processes']:
                 self.workers[name].unresponsive += 1
 
         for name in self.stats['workers'].keys():
             self.workers[name].unresponsive = 0
-            LOGGER.info('%s worker processed %i events with %i errors '
-                        'in %i batches with %i pending events', name,
-                        self.stats['workers'][name][worker.Process.PROCESSED],
-                        self.stats['workers'][name][worker.Process.ERROR],
-                        self.stats['workers'][name][worker.Process.BATCHES],
-                        self.stats['workers'][name][worker.Process.PENDING])
+            LOGGER.info(
+                '%s worker processed %i events with %i errors '
+                'in %i batches with %i pending events',
+                name,
+                self.stats['workers'][name][worker.Process.PROCESSED],
+                self.stats['workers'][name][worker.Process.ERROR],
+                self.stats['workers'][name][worker.Process.BATCHES],
+                self.stats['workers'][name][worker.Process.PENDING],
+            )
 
     def new_process(self, name: str) -> worker.Process:
         """Create a new worker instance / process"""
@@ -223,7 +236,7 @@ class MasterControlProgram(state.State):
             'config': {
                 'logging': self.config.logging,
                 'statsd': self.config.application.get('statsd', {}),
-                'worker': self.workers[name].config
+                'worker': self.workers[name].config,
             },
             'daemon': False,
             'stats_queue': self.stats_queue,
@@ -231,18 +244,18 @@ class MasterControlProgram(state.State):
         }
         return worker.Process(name=name, kwargs=kwargs)
 
-    def on_abort(self,
-                 _signum: int,
-                 _frame: types.FrameType) -> typing.NoReturn:
+    def on_abort(
+        self, _signum: int, _frame: types.FrameType
+    ) -> typing.NoReturn:
         LOGGER.debug('Abort signal received from child')
         time.sleep(1)
         if not self.active_processes:
             LOGGER.info('Stopping with no active processes and child error')
             self.set_state(self.STATE_STOPPED)
 
-    def on_timer(self,
-                 _signum: int,
-                 _frame: types.FrameType) -> typing.NoReturn:
+    def on_timer(
+        self, _signum: int, _frame: types.FrameType
+    ) -> typing.NoReturn:
         if self.is_shutting_down:
             LOGGER.debug('Polling timer fired while shutting down')
             return
@@ -289,8 +302,9 @@ class MasterControlProgram(state.State):
     @property
     def poll_duration_exceeded(self) -> bool:
         """Return true if the poll time has been exceeded."""
-        return (time.time() -
-                self.poll_data['timestamp']) >= self.poll_interval
+        return (
+            time.time() - self.poll_data['timestamp']
+        ) >= self.poll_interval
 
     def poll_results_check(self) -> typing.NoReturn:
         """Check the polling results by checking to see if the stats queue is
@@ -311,8 +325,9 @@ class MasterControlProgram(state.State):
             self.collect_results(stats)
 
         if self.poll_data['processes']:
-            LOGGER.warning('Did not receive results from %r',
-                           self.poll_data['processes'])
+            LOGGER.warning(
+                'Did not receive results from %r', self.poll_data['processes']
+            )
 
     def remove_worker_process(self, name: str) -> typing.NoReturn:
         """Remove all details for the specified worker and process name."""

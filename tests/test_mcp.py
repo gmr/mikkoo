@@ -1,4 +1,6 @@
 """Tests for the MCP"""
+
+import typing
 from unittest import mock
 
 from helper import config
@@ -8,8 +10,7 @@ from tests import test_state
 
 
 class TestMCP(test_state.TestState):
-
-    CONFIG = {'wake_interval': 30.0, 'workers': {}}
+    CONFIG: typing.ClassVar[dict] = {'wake_interval': 30.0, 'workers': {}}
 
     async def asyncSetUp(self):
         await super().asyncSetUp()

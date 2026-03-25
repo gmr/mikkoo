@@ -1,5 +1,6 @@
 name: Testing
 on:
+  pull_request:
   push:
     branches: ["*"]
     paths-ignore:
@@ -7,28 +8,40 @@ on:
       - '*.md'
       - '*.rst'
     tags-ignore: ["*"]
-  pull_request: {}
+
 jobs:
   test:
     runs-on: ubuntu-latest
     timeout-minutes: 3
     strategy:
+      fail-fast: false
       matrix:
-        python: [3.11]
-    container:
-      image: python:${{ matrix.python }}-alpine
+        python: ["3.11", "3.12", "3.13", "3.14"]
+
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v1
+        uses: actions/checkout@v6
 
-      - name: Install OS dependencies
-        run: apk --update add gcc libffi-dev linux-headers make musl-dev postgresql-dev
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          python-version: "${{ matrix.python }}"
 
-      - name: Install testing dependencies
-        run: pip3 --no-cache-dir install -e '.[testing]'
+      - name: Sync dependencies
+        run: uv sync --group dev
 
-      - name: Setup test environment
-        run: ci/test-before-script.sh
+      - name: Lint check
+        run: uv run pre-commit run --all-files
 
       - name: Run tests
-        run: ci/test-script.sh
+        run: |
+          mkdir -p build
+          uv run coverage run
+          uv run coverage report
+          uv run coverage xml
+
+      - name: Upload coverage
+        uses: codecov/codecov-action@v5
+        with:
+          files: ./build/coverage.xml
+          flags: unittests
