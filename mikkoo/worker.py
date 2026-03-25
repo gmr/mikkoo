@@ -283,7 +283,7 @@ class Process(multiprocessing.Process, state.State):
 
     def on_rabbitmq_open(
         self, conn: asyncio_connection.AsyncioConnection
-    ) -> typing.NoReturn:
+    ) -> None:
         """This method is called by pika once the connection to RabbitMQ has
         been established. It passes the handle to the connection object in
         case we need it, but in this case, we'll just mark it unused.
@@ -319,7 +319,7 @@ class Process(multiprocessing.Process, state.State):
 
     def on_rabbitmq_blocked(
         self, _c: connection.Connection, _f: frame.Method
-    ) -> typing.NoReturn:
+    ) -> None:
         """Invoked when the RabbitMQ connection has notified us that it is
         blocking publishing.
 
@@ -330,7 +330,7 @@ class Process(multiprocessing.Process, state.State):
 
     def on_rabbitmq_unblocked(
         self, _c: connection.Connection, _f: frame.Method
-    ) -> typing.NoReturn:
+    ) -> None:
         """Invoked when the RabbitMQ connection has notified us that
         publishing is no longer unblocked.
 
@@ -349,7 +349,7 @@ class Process(multiprocessing.Process, state.State):
 
     def on_rabbitmq_closed(
         self, _conn: asyncio_connection.AsyncioConnection, error: Exception
-    ) -> typing.NoReturn:
+    ) -> None:
         """This method is invoked by pika when the connection to RabbitMQ is
         closed unexpectedly. Shutdown if not already doing so.
 
@@ -381,7 +381,7 @@ class Process(multiprocessing.Process, state.State):
 
     def on_rabbitmq_channel_open(
         self, channel: pika.channel.Channel
-    ) -> typing.NoReturn:
+    ) -> None:
         """This method is invoked by pika when the channel has been opened. It
         will change the state to IDLE, add the callbacks and set up the channel
         to start consuming.
@@ -409,7 +409,7 @@ class Process(multiprocessing.Process, state.State):
 
     def on_rabbitmq_channel_closed(
         self, channel: pika.channel.Channel, error: Exception
-    ) -> typing.NoReturn:
+    ) -> None:
         """Invoked by pika when RabbitMQ unexpectedly closes the channel.
         Channels are usually closed if you attempt to do something that
         violates the protocol, such as re-declare an exchange or queue with
@@ -445,7 +445,7 @@ class Process(multiprocessing.Process, state.State):
 
     def on_rabbitmq_publish_confirm(
         self, _f: pika.frame.Method
-    ) -> typing.NoReturn:
+    ) -> None:
         """Invoked by pika when a delivery confirmation is received."""
         if self.event_processed and self.current_event:
             LOGGER.debug('Event %s confirmed', self.current_event['ev_id'])
@@ -458,7 +458,7 @@ class Process(multiprocessing.Process, state.State):
         method: spec.Basic.Return,
         _p: spec.BasicProperties,
         _b: bytes,
-    ) -> typing.NoReturn:
+    ) -> None:
         """Invoked by pika when a delivery failure is received. Setting the
         current confirmation future exception to a
         :class:`mikkoo.worker.EventError`.
@@ -593,8 +593,8 @@ class Process(multiprocessing.Process, state.State):
                 )
                 properties = {}
             for key in properties:
-                if key.encode('ascii') in self.VALID_PROPERTIES:
-                    kwargs[key.encode('ascii')] = properties[key]
+                if key in self.VALID_PROPERTIES:
+                    kwargs[key] = properties[key]
         if 'headers' not in kwargs:
             kwargs['headers'] = {}
 
@@ -652,7 +652,8 @@ class Process(multiprocessing.Process, state.State):
 
         """
         self.set_state(self.STATE_INITIALIZING)
-        self.ioloop = asyncio.get_event_loop()
+        self.ioloop = asyncio.new_event_loop()
+        asyncio.set_event_loop(self.ioloop)
         self.ioloop.run_until_complete(self.setup())
         if not self.is_stopped:
             LOGGER.info('%s worker started', self.name)
@@ -666,7 +667,7 @@ class Process(multiprocessing.Process, state.State):
                 )
                 self.ioloop.close()
 
-    async def setup(self) -> typing.NoReturn:
+    async def setup(self) -> None:
         """Ensure that all the things that are required are set up when the
         Process is started.
 
@@ -690,14 +691,14 @@ class Process(multiprocessing.Process, state.State):
         self.setup_signal_handlers()
         self.connect_to_rabbitmq()
 
-    async def create_queue(self) -> typing.NoReturn:
+    async def create_queue(self) -> None:
         """Create the PgQ for the worker."""
         LOGGER.debug('Fetching PgQ information')
         result = await self.callproc('pgq.create_queue', self.worker_name)
         if not result:
             LOGGER.debug('Queue already exists')
 
-    async def register_consumer(self) -> typing.NoReturn:
+    async def register_consumer(self) -> None:
         """Register the consumer. If registration fails, shutdown the worker."""
         results = await self.callproc(
             'pgq.register_consumer', self.worker_name, self.consumer_name
@@ -709,13 +710,13 @@ class Process(multiprocessing.Process, state.State):
         elif not results[0]['register_consumer']:
             LOGGER.debug('Consumer is already registered')
 
-    async def unregister_consumer(self) -> typing.NoReturn:
+    async def unregister_consumer(self) -> None:
         """Unregister the consumer with PgQ"""
         await self.callproc(
             'pgq.unregister_consumer', self.worker_name, self.consumer_name
         )
 
-    def on_ready_to_stop(self) -> typing.NoReturn:
+    def on_ready_to_stop(self) -> None:
         """Invoked when the worker is shutting down and is no longer processing
         a PgQ batch.
 
@@ -754,15 +755,15 @@ class Process(multiprocessing.Process, state.State):
         self.ioloop.add_signal_handler(signal.SIGPROF, self.on_sigprof)
         LOGGER.debug('Signal handlers setup')
 
-    def async_call_soon(self, func: typing.Callable, *args) -> typing.NoReturn:
-        self.ioloop.call_soon(asyncio.ensure_future(func(*args)))
+    def async_call_soon(self, func: typing.Callable, *args) -> None:
+        self.ioloop.call_soon(lambda: asyncio.ensure_future(func(*args)))
 
-    def on_sigabrt(self) -> typing.NoReturn:
+    def on_sigabrt(self) -> None:
         """Invoked when the MCP sends a SIGABRT to shut down the worker"""
         LOGGER.debug('on_sigabrt when %s', self.state_description)
         self.async_call_soon(self.stop)
 
-    def on_sigprof(self) -> typing.NoReturn:
+    def on_sigprof(self) -> None:
         """Called when SIGPROF is sent to the process, will dump the stats, in
         future versions, queue them for the master process to get data.
 
@@ -781,7 +782,7 @@ class Process(multiprocessing.Process, state.State):
         self.stats_queue.put(self.stats.report(), True)
         self.last_stats_time = time.time()
 
-    async def stop(self) -> typing.NoReturn:
+    async def stop(self) -> None:
         """Stop the consumer from consuming by calling BasicCancel and setting
         our state.
         """
@@ -808,13 +809,13 @@ class Process(multiprocessing.Process, state.State):
         self.on_ready_to_stop()
 
     @staticmethod
-    def send_exception_to_sentry() -> typing.NoReturn:
+    def send_exception_to_sentry() -> None:
         """Send an exception to Sentry if enabled."""
         if sentry_sdk:
             sentry_sdk.capture_exception(sys.exc_info())
 
     @staticmethod
-    def set_sentry_context(tag: str, value: str) -> typing.NoReturn:
+    def set_sentry_context(tag: str, value: str) -> None:
         """Set a context tag in Sentry for the given key and value."""
         if sentry_sdk:
             LOGGER.debug('Setting sentry context for %s to %s', tag, value)
